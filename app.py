@@ -127,34 +127,16 @@ class MainWindow(QMainWindow):
         pbl_layout.addWidget(self.spin_pbl)
         param_layout.addLayout(pbl_layout)
 
-        # Angle tolerances & sample step
-        angle_layout = QVBoxLayout()
-        ang_v_label = QLabel("세로 각도 허용 (deg)")
-        self.spin_ang_v = QDoubleSpinBox()
-        self.spin_ang_v.setRange(0.0, 45.0)
-        self.spin_ang_v.setDecimals(1)
-        self.spin_ang_v.setValue(5.0)
-
-        ang_h_label = QLabel("가로 각도 허용 (deg)")
-        self.spin_ang_h = QDoubleSpinBox()
-        self.spin_ang_h.setRange(0.0, 45.0)
-        self.spin_ang_h.setDecimals(1)
-        self.spin_ang_h.setValue(5.0)
-
+        # Sample step
+        step_layout = QVBoxLayout()
         step_label = QLabel("샘플 간 거리 (pixel)")
         self.spin_step = QDoubleSpinBox()
         self.spin_step.setRange(0.01, 100.0)
         self.spin_step.setDecimals(2)
         self.spin_step.setValue(1.0)
-
-        angle_layout.addWidget(ang_v_label)
-        angle_layout.addWidget(self.spin_ang_v)
-        angle_layout.addWidget(ang_h_label)
-        angle_layout.addWidget(self.spin_ang_h)
-        angle_layout.addWidget(step_label)
-        angle_layout.addWidget(self.spin_step)
-
-        param_layout.addLayout(angle_layout)
+        step_layout.addWidget(step_label)
+        step_layout.addWidget(self.spin_step)
+        param_layout.addLayout(step_layout)
 
         main_layout.addWidget(param_group)
 
@@ -240,15 +222,14 @@ class MainWindow(QMainWindow):
             SX=self.spin_sx.value(),
             SY=self.spin_sy.value(),
             PBL=self.spin_pbl.value(),
-            vertical_angle_tol_deg=self.spin_ang_v.value(),
-            horizontal_angle_tol_deg=self.spin_ang_h.value(),
             sample_step=self.spin_step.value(),
         )
 
         self.log(
             f"실행 시작: 파일 {count}개, "
-            f"FH={config.FH}, UH={config.UH}, SX={config.SX}, SY={config.SY}, PBL={config.PBL}"
+            f"FH={config.FH}, UH={config.UH}, SX={config.SX}, SY={config.SY}, PBL={config.PBL}, step={config.sample_step}"
         )
+        self.log("=" * 60)
 
         num_success = 0
         num_fail = 0
@@ -259,18 +240,44 @@ class MainWindow(QMainWindow):
             out_txt = base + "_bending_points.txt"
             out_img = base + "_visualization.png"
 
+            self.log(f"\n[{i+1}/{count}] 처리 중: {os.path.basename(path)}")
+
             try:
+                self.log(f"  - 파일 읽는 중...")
                 original_points = parse_txt_points(path)
+                self.log(f"  - 읽은 점 개수: {len(original_points)}")
+
+                self.log(f"  - 전략 2 알고리즘 실행 중...")
                 result = run_strategy2_on_file(path, config)
+                self.log(f"  - 거북이 선 경로 길이: {len(result.turtle_line_path)}")
+                self.log(f"  - 앞머리 구간: {len(result.front_head_run)} 점")
+                self.log(f"  - 윗머리 구간: {len(result.upper_head_run)} 점")
+                self.log(f"  - Mv: ({result.mv[0]}, {result.mv[1]})")
+                self.log(f"  - BSP: ({result.bsp[0]}, {result.bsp[1]})")
+
+                self.log(f"  - 결과 저장 중...")
                 save_result_points_txt(out_txt, result)
+                self.log(f"  - Bending 포인트 개수: {len(result.bending_points)}")
+
+                self.log(f"  - 시각화 생성 중...")
                 visualize_result(original_points, result, out_img)
-                self.log(f"[성공] {os.path.basename(path)} -> {os.path.basename(out_txt)}, {os.path.basename(out_img)}")
+                self.log(f"  - 시각화 저장: {os.path.basename(out_img)}")
+
+                self.log(f"[성공] {os.path.basename(path)}")
+                self.log(f"  -> {os.path.basename(out_txt)} ({len(result.bending_points)} 점)")
+                self.log(f"  -> {os.path.basename(out_img)}")
                 num_success += 1
             except Strategy2Error as e:
-                self.log(f"[실패] {os.path.basename(path)}: {e}")
+                self.log(f"[실패] {os.path.basename(path)}")
+                self.log(f"  오류: {e}")
+                import traceback
+                self.log(f"  상세: {traceback.format_exc()}")
                 num_fail += 1
             except Exception as e:  # noqa: BLE001
-                self.log(f"[오류] {os.path.basename(path)}: {e}")
+                self.log(f"[오류] {os.path.basename(path)}")
+                self.log(f"  예외: {type(e).__name__}: {e}")
+                import traceback
+                self.log(f"  상세:\n{traceback.format_exc()}")
                 num_fail += 1
 
         QMessageBox.information(

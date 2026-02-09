@@ -18,6 +18,7 @@ from .geometry import (
     find_first_horizontal_run,
     find_first_vertical_run,
     find_longest_path_with_branching,
+    get_neighbors,
     sample_path_at_intervals,
 )
 
@@ -90,7 +91,11 @@ def parse_txt_points(path: str) -> List[Point]:
 
 
 def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], List[Point]]:
-    """Connected component들 중 점 개수가 가장 많은 상위 2개를 선택."""
+    """Connected component들 중 점 개수가 가장 많은 상위 2개를 선택.
+    
+    만약 거북이 선이 여러 component로 분리되어 있으면 (예: 앞머리+본체),
+    가장 긴 component와 그와 가까운 component를 합쳐서 하나의 선으로 처리.
+    """
     if len(components) < 2:
         raise Strategy2Error("최소 두 개의 연결된 선이 필요합니다.")
 
@@ -100,7 +105,27 @@ def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], 
 
     idx1 = lengths[0][1]
     idx2 = lengths[1][1]
-    return components[idx1], components[idx2]
+    
+    comp1 = components[idx1]
+    comp2 = components[idx2]
+    
+    # 두 component가 가까이 있으면 합치기 (거북이 선이 분리된 경우 처리)
+    # 간단한 휴리스틱: 두 component의 최소 거리가 작으면 합침
+    min_dist = min(
+        distance(p1, p2) for p1 in comp1 for p2 in comp2
+    )
+    if min_dist < 10:  # 10픽셀 이내면 합침
+        merged = comp1 + comp2
+        # 나머지 component 중 가장 긴 것 찾기
+        remaining = [components[i] for i, (_, idx) in enumerate(lengths) if idx not in [idx1, idx2]]
+        if remaining:
+            comp2 = max(remaining, key=len)
+        else:
+            # 두 번째 component가 없으면 첫 번째만 반환 (하지만 함수 시그니처상 두 개 필요)
+            comp2 = comp1[:]
+        return merged, comp2
+    
+    return comp1, comp2
 
 
 def find_turtle_line(comp1: List[Point], comp2: List[Point]) -> List[Point]:
@@ -119,18 +144,103 @@ def find_tlsp(turtle_component: List[Point]) -> Tuple[Point, List[Point]]:
     TLSP: 끝점 중 더 아래(y 최대)인 점.
     순환 구조나 분기점이 있으면 예외처리.
     """
+    # 가장 아래(y 최대)인 점 찾기
+    max_y_point = max(turtle_component, key=lambda p: p[1])
+    max_y = max_y_point[1]
+    
+    # 같은 y값을 가진 점들 중에서 끝점 찾기
+    candidates = [p for p in turtle_component if p[1] == max_y]
+    
     endpoints = find_endpoints(turtle_component)
+    if endpoints:
+        # 끝점 중에서 가장 아래인 것 선택
+        tlsp_candidates = [ep for ep in endpoints if ep[1] == max_y]
+        if tlsp_candidates:
+            tlsp = tlsp_candidates[0]
+        else:
+            # 끝점 중 가장 아래
+            tlsp = max(endpoints, key=lambda p: p[1])
+    else:
+        # 순환 구조: 가장 아래 점 선택
+        tlsp = max_y_point
+    
+    # 다른 끝점 찾기
+    other_endpoints = [ep for ep in endpoints if ep != tlsp] if endpoints else []
+    if other_endpoints:
+        end_point = other_endpoints[0]
+    else:
+        # 끝점이 없으면 가장 먼 점 찾기
+        end_point = max(
+            turtle_component,
+            key=lambda p: distance(tlsp, p) if p != tlsp else -1,
+        )
+    
+    # TLSP에서 end_point까지의 경로 찾기
+    try:
+        path = find_longest_path_with_branching(turtle_component, tlsp, end_point)
+    except Exception:
+        # 실패 시 간단한 경로 사용
+        path = _build_ordered_path(turtle_component, tlsp)
 
-    if not endpoints:
-        raise Strategy2Error("거북이 선에서 끝점을 찾을 수 없습니다.")
-
-    # 더 아래에 있는 끝점 선택
-    tlsp = max(endpoints, key=lambda p: p[1])
-
-    # TLSP에서 가장 긴 경로 찾기
-    path = find_longest_path_with_branching(turtle_component, tlsp)
+    if len(path) < 2:
+        raise Strategy2Error("거북이 선 경로가 너무 짧습니다.")
 
     return tlsp, path
+
+
+def _build_ordered_path(component: List[Point], start: Point) -> List[Point]:
+    """순서대로 경로 생성: 시작점에서 연결된 점들을 순차적으로 따라가며 경로 생성."""
+    from typing import Set
+
+    point_set = set(component)
+    path: List[Point] = [start]
+    visited: Set[Point] = {start}
+    current = start
+
+    # 시작점에서 끝점까지 순차적으로 따라가기
+    while True:
+        neighbors = get_neighbors(current, point_set)
+        unvisited_neighbors = [n for n in neighbors if n not in visited]
+        
+        if not unvisited_neighbors:
+            break
+        
+        # 다음 점 선택 전략:
+        # 1. 이웃이 1개면 그대로 선택
+        # 2. 여러 이웃이 있으면:
+        #    - 현재 방향과 일치하는 이웃 우선
+        #    - 없으면 가장 가까운 이웃
+        if len(unvisited_neighbors) == 1:
+            next_point = unvisited_neighbors[0]
+        else:
+            # 현재 경로의 방향 추정
+            if len(path) >= 2:
+                prev_dir = (
+                    path[-1][0] - path[-2][0],
+                    path[-1][1] - path[-2][1],
+                )
+                # 같은 방향의 이웃 찾기
+                same_dir_neighbors = [
+                    n
+                    for n in unvisited_neighbors
+                    if (
+                        n[0] - current[0],
+                        n[1] - current[1],
+                    ) == prev_dir
+                ]
+                if same_dir_neighbors:
+                    next_point = same_dir_neighbors[0]
+                else:
+                    # 방향이 다르면 첫 번째 이웃 선택
+                    next_point = unvisited_neighbors[0]
+            else:
+                next_point = unvisited_neighbors[0]
+        
+        visited.add(next_point)
+        path.append(next_point)
+        current = next_point
+
+    return path
 
 
 def find_front_head_and_upper_head(

@@ -161,53 +161,37 @@ def find_longest_path_with_branching(
                     farthest = p
         end = farthest
 
-    # 간단한 BFS로 경로 찾기 (visited 체크로 순환 방지)
-    parent: Dict[Point, Point | None] = {start: None}
-    queue = deque([start])
+    # DFS로 경로 찾기 (재귀 대신 스택 사용)
+    stack = [(start, [start])]
     visited: Set[Point] = {start}
+    longest_path: List[Point] = [start]
 
-    while queue:
-        current = queue.popleft()
+    while stack:
+        current, path = stack.pop()
 
         if current == end:
-            # 경로 복원
-            path = []
-            node = end
-            while node is not None:
-                path.append(node)
-                node = parent[node]
-            return list(reversed(path))
+            if len(path) > len(longest_path):
+                longest_path = path[:]
+            continue
 
         neighbors = get_neighbors(current, point_set)
+        unvisited_neighbors = [n for n in neighbors if n not in visited]
+        
         # 분기점이면 가장 긴 경로로 이어지는 이웃만 선택
-        if get_degree(current, point_set) >= 3:
+        if len(unvisited_neighbors) > 1 and get_degree(current, point_set) >= 3:
             # 각 이웃으로 가는 경로의 잠재적 길이 추정
             neighbor_scores = []
-            for neighbor in neighbors:
-                if neighbor not in visited:
-                    # 간단한 휴리스틱: end까지의 거리
-                    score = -distance(neighbor, end)
-                    neighbor_scores.append((score, neighbor))
-            if neighbor_scores:
-                neighbors = [n for _, n in sorted(neighbor_scores, reverse=True)[:1]]
+            for neighbor in unvisited_neighbors:
+                # 간단한 휴리스틱: end까지의 거리
+                score = -distance(neighbor, end)
+                neighbor_scores.append((score, neighbor))
+            unvisited_neighbors = [n for _, n in sorted(neighbor_scores, reverse=True)[:1]]
 
-        for neighbor in neighbors:
-            if neighbor not in visited:
-                visited.add(neighbor)
-                parent[neighbor] = current
-                queue.append(neighbor)
+        for neighbor in unvisited_neighbors:
+            visited.add(neighbor)
+            stack.append((neighbor, path + [neighbor]))
 
-    # end에 도달하지 못한 경우, start에서 가장 먼 점까지의 경로 반환
-    if visited:
-        farthest = max(visited, key=lambda p: distance(start, p))
-        path = []
-        node = farthest
-        while node is not None:
-            path.append(node)
-            node = parent[node]
-        return list(reversed(path))
-
-    return [start]
+    return longest_path if len(longest_path) > 1 else [start]
 
 
 def detect_straight_runs(path: List[Point]) -> List[Tuple[str, List[Point]]]:

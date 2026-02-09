@@ -36,7 +36,7 @@ def generate_turtle_and_partner(params: SyntheticParams) -> List[Point]:
     """
     points: List[Point] = []
 
-    # 거북이 선 생성
+    # 거북이 선 생성 (연결된 하나의 component로)
     turtle_points: List[Point] = []
 
     # 1) 앞머리 세로 구간 (x=0에서 head_height 만큼 세로)
@@ -49,13 +49,27 @@ def generate_turtle_and_partner(params: SyntheticParams) -> List[Point]:
         turtle_points.append((x0, y))
 
     # 2) 윗머리 가로 구간 (y_top 위치에서 head_width 만큼 가로)
+    # 마지막 세로 점(y_top)에서 시작해서 가로로 연결
     for i in range(1, params.head_width + 1):
         x = x0 + i
         turtle_points.append((x, y_top))
 
     # 3) 본체 bending 구간
-    x_start = x0 + params.head_width + 1
-    for i in range(params.num_points):
+    # 마지막 가로 점에서 y 방향으로 연결된 다음 가로로 진행
+    x_start = x0 + params.head_width
+    y_start = y_top
+    
+    # y_top에서 base_y로 연결 (대각선 또는 세로)
+    if y_start != params.base_y:
+        # 대각선으로 연결
+        dy = params.base_y - y_start
+        steps = abs(dy)
+        for i in range(1, steps + 1):
+            y = y_start + (dy // steps) * i if steps > 0 else y_start
+            turtle_points.append((x_start, y))
+    
+    # 본체 가로 구간
+    for i in range(1, params.num_points + 1):
         x = x_start + i
 
         # 굽힘 프로파일
@@ -67,12 +81,13 @@ def generate_turtle_and_partner(params: SyntheticParams) -> List[Point]:
             bend = 0
 
         y = params.base_y + bend
-        # 작은 노이즈 추가
+        # 작은 노이즈 추가 (연결성 유지)
         noise_x = int(round((random.random() - 0.5) * params.noise))
         noise_y = int(round((random.random() - 0.5) * params.noise))
+        # 노이즈로 인해 연결이 끊어지지 않도록 제한
+        noise_x = max(-1, min(1, noise_x))
+        noise_y = max(-1, min(1, noise_y))
         turtle_points.append((x + noise_x, y + noise_y))
-
-    points.extend(turtle_points)
 
     # 파트너 선 생성 (위쪽에 거의 평행)
     partner_points: List[Point] = []
@@ -84,6 +99,9 @@ def generate_turtle_and_partner(params: SyntheticParams) -> List[Point]:
         noise_y = int(round((random.random() - 0.5) * params.noise))
         partner_points.append((x + noise_x, partner_y + noise_y))
 
+    # 두 선을 분리하기 위해 빈 줄 추가하지 않고 그냥 합침
+    # (connected component가 자동으로 분리됨)
+    points.extend(turtle_points)
     points.extend(partner_points)
 
     return points
