@@ -1,234 +1,225 @@
+"""
+전략 2: 거북이 머리 더듬기 알고리즘.
+
+점 기반 입력에서 connected component를 복원하고,
+거북이 선을 찾아 가상 마커와 bending 포인트를 계산.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 from .geometry import (
     Point,
-    Segment,
-    build_segments,
+    compute_line_intersection,
     distance,
-    polyline_length,
-    find_closest_point_on_polyline,
-    sample_along_polyline,
+    find_connected_components,
+    find_endpoints,
+    find_first_horizontal_run,
+    find_first_vertical_run,
+    find_longest_path_with_branching,
+    sample_path_at_intervals,
 )
 
 
 @dataclass
 class Strategy2Config:
-    FH: float  # Forehead vertical length threshold
-    UH: float  # Upper head horizontal length threshold
+    FH: float  # Forehead vertical length threshold (점 개수)
+    UH: float  # Upper head horizontal length threshold (점 개수)
     SX: float  # Shift in x for virtual marker
     SY: float  # Shift in y for virtual marker
-    PBL: int   # Panel bending length (treated as number of output points)
-    # 각도 및 샘플링 정밀도 파라미터
-    vertical_angle_tol_deg: float = 5.0   # 세로 구간 판정 각도 허용치(도)
-    horizontal_angle_tol_deg: float = 5.0  # 가로 구간 판정 각도 허용치(도)
-    sample_step: float = 1.0  # BSP에서 따라갈 때 포인트 간 거리(픽셀)
+    PBL: int  # Panel bending length (출력 포인트 개수)
+    sample_step: float = 1.0  # 샘플링 간격 (픽셀)
 
 
 @dataclass
 class Strategy2Result:
     tlsp: Point
-    turtle_line_points: List[Point]
-    front_head_segment: Segment
-    upper_head_segment: Segment
-    mv: Point
+    turtle_line_path: List[Point]  # 거북이 선의 경로 (순서대로)
+    front_head_run: List[Point]  # 거북이 앞머리끝 직선 구간
+    upper_head_run: List[Point]  # 거북이 윗머리끝 직선 구간
+    mv: Point  # 가상 마커
     mv_shifted: Point
     bsp: Point
-    bending_points: List[Point]  # points with indices 1..PBL
+    bending_points: List[Point]  # 순서번호 1..PBL에 해당하는 점들
 
 
 class Strategy2Error(Exception):
     """Domain-specific error for Strategy 2 processing."""
 
 
-def parse_txt_points(path: str) -> List[List[Point]]:
-    """Parse TXT file into list of polylines.
+def parse_txt_points(path: str) -> List[Point]:
+    """TXT 파일에서 점 좌표들을 읽어온다.
 
-    Assumptions:
-    - Each line is either:
-        x y
-      or
-        x,y
-      where x, y are float or integer.
-    - Empty lines separate different polylines.
+    - 한 줄에 한 점: x,y 또는 x y
+    - # 로 시작하는 줄은 주석으로 무시
+    - 빈 줄은 무시
     """
-    polylines: List[List[Point]] = []
-    current: List[Point] = []
+    points: List[Point] = []
 
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
             line = raw.strip()
             if not line:
-                if current:
-                    polylines.append(current)
-                    current = []
                 continue
 
-            # Skip comment lines (starting with #)
+            # 주석 줄 무시
             if line.startswith("#"):
                 continue
 
-            # Split by comma or whitespace
+            # x,y 또는 x y 형식 파싱
             if "," in line:
                 parts = line.split(",")
             else:
                 parts = line.split()
+
             if len(parts) < 2:
                 continue
+
             try:
-                x = float(parts[0])
-                y = float(parts[1])
+                x = int(round(float(parts[0])))
+                y = int(round(float(parts[1])))
+                points.append((x, y))
             except ValueError:
                 continue
-            current.append((x, y))
 
-    if current:
-        polylines.append(current)
-
-    if not polylines:
+    if not points:
         raise Strategy2Error("입력 txt 파일에서 좌표를 찾을 수 없습니다.")
 
-    return polylines
+    return points
 
 
-def pick_two_longest_polylines(polylines: List[List[Point]]) -> Tuple[List[Point], List[Point]]:
-    if len(polylines) < 2:
-        raise Strategy2Error("최소 두 개의 연결된 선(폴리라인)이 필요합니다.")
+def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], List[Point]]:
+    """Connected component들 중 점 개수가 가장 많은 상위 2개를 선택."""
+    if len(components) < 2:
+        raise Strategy2Error("최소 두 개의 연결된 선이 필요합니다.")
 
-    lengths = [(polyline_length(pl), i) for i, pl in enumerate(polylines)]
-    lengths.sort(reverse=True)  # longest first
+    # 점 개수로 정렬
+    lengths = [(len(comp), i) for i, comp in enumerate(components)]
+    lengths.sort(reverse=True)
+
     idx1 = lengths[0][1]
     idx2 = lengths[1][1]
-    return polylines[idx1], polylines[idx2]
+    return components[idx1], components[idx2]
 
 
-def find_turtle_line(pl1: List[Point], pl2: List[Point]) -> List[Point]:
-    """Find turtle line as polyline containing the lowest point in y."""
-    all_points = [(p, 1) for p in pl1] + [(p, 2) for p in pl2]
-    # In image coordinates, y가 클수록 아래라고 가정
+def find_turtle_line(comp1: List[Point], comp2: List[Point]) -> List[Point]:
+    """두 component 중 거북이 선을 찾는다.
+
+    거북이 선: 가장 아래(y 최대)인 점을 포함하는 component.
+    """
+    all_points = [(p, 1) for p in comp1] + [(p, 2) for p in comp2]
     lowest_point, which = max(all_points, key=lambda t: t[0][1])
-    return pl1 if which == 1 else pl2
+    return comp1 if which == 1 else comp2
 
 
-def orient_turtle_line(points: List[Point]) -> Tuple[List[Point], Point]:
-    """Ensure TLSP (lower endpoint) is the first point.
+def find_tlsp(turtle_component: List[Point]) -> Tuple[Point, List[Point]]:
+    """거북이 선의 TLSP를 찾고 경로를 정렬한다.
 
-    Returns oriented points and TLSP.
+    TLSP: 끝점 중 더 아래(y 최대)인 점.
+    순환 구조나 분기점이 있으면 예외처리.
     """
-    if len(points) < 2:
-        raise Strategy2Error("거북이 선에 최소 두 개의 점이 필요합니다.")
+    endpoints = find_endpoints(turtle_component)
 
-    p_start, p_end = points[0], points[-1]
-    # 아래쪽(endpoints with larger y)
-    if p_start[1] >= p_end[1]:
-        tlsp = p_start
-        oriented = points
-    else:
-        tlsp = p_end
-        oriented = list(reversed(points))
+    if not endpoints:
+        raise Strategy2Error("거북이 선에서 끝점을 찾을 수 없습니다.")
 
-    return oriented, tlsp
+    # 더 아래에 있는 끝점 선택
+    tlsp = max(endpoints, key=lambda p: p[1])
 
+    # TLSP에서 가장 긴 경로 찾기
+    path = find_longest_path_with_branching(turtle_component, tlsp)
 
-def find_first_vertical_segment(
-    segments: List[Segment], fh: float, angle_tol_deg: float
-) -> Segment:
-    """Find first vertical segment with length >= FH."""
-    import math
-
-    max_sin = math.sin(math.radians(angle_tol_deg))
-
-    for seg in segments:
-        if seg.length < fh:
-            continue
-        # vertical if dx is small relative to length
-        if abs(seg.dx) / max(seg.length, 1e-9) <= max_sin:
-            return seg
-    raise Strategy2Error("조건을 만족하는 세로(FH) 구간을 찾지 못했습니다.")
+    return tlsp, path
 
 
-def find_first_horizontal_segment(
-    segments: List[Segment], uh: float, angle_tol_deg: float
-) -> Segment:
-    """Find first horizontal segment with length >= UH."""
-    import math
+def find_front_head_and_upper_head(
+    path: List[Point], fh: int, uh: int
+) -> Tuple[List[Point], List[Point]]:
+    """거북이 선 경로에서 앞머리끝과 윗머리끝 직선 구간을 찾는다."""
+    # 앞머리끝: 세로 직선 구간 (점 개수 >= FH)
+    front_head = find_first_vertical_run(path, int(fh))
+    if not front_head:
+        raise Strategy2Error(f"조건을 만족하는 세로(FH={fh}) 구간을 찾지 못했습니다.")
 
-    max_sin = math.sin(math.radians(angle_tol_deg))
+    # 앞머리끝 이후 경로에서 윗머리끝 찾기
+    front_head_end_idx = path.index(front_head[-1])
+    remaining_path = path[front_head_end_idx + 1 :]
 
-    for seg in segments:
-        if seg.length < uh:
-            continue
-        # horizontal if dy is small relative to length
-        if abs(seg.dy) / max(seg.length, 1e-9) <= max_sin:
-            return seg
-    raise Strategy2Error("조건을 만족하는 가로(UH) 구간을 찾지 못했습니다.")
+    upper_head = find_first_horizontal_run(remaining_path, int(uh))
+    if not upper_head:
+        raise Strategy2Error(f"조건을 만족하는 가로(UH={uh}) 구간을 찾지 못했습니다.")
+
+    return front_head, upper_head
 
 
-def compute_mv(front_head: Segment, upper_head: Segment) -> Point:
-    """Compute virtual marker Mv from:
-    - x: average x of front head vertical segment
-    - y: average y of upper head horizontal segment
+def compute_mv(front_head: List[Point], upper_head: List[Point]) -> Point:
+    """가상 마커 Mv 계산.
+
+    FH 직선(x=상수)과 UH 직선(y=상수)의 교차점.
     """
-    x_v = (front_head.start[0] + front_head.end[0]) / 2.0
-    y_h = (upper_head.start[1] + upper_head.end[1]) / 2.0
-    return (x_v, y_h)
+    return compute_line_intersection(front_head, upper_head)
+
+
+def find_bsp(turtle_path: List[Point], mv_shifted: Point) -> Point:
+    """BSP 찾기: 거북이 선의 점 중 mv_shifted에 가장 가까운 점."""
+    if not turtle_path:
+        raise Strategy2Error("거북이 선 경로가 비어있습니다.")
+
+    return min(turtle_path, key=lambda p: distance(p, mv_shifted))
 
 
 def run_strategy2_on_points(
-    polylines: List[List[Point]], config: Strategy2Config
+    points: List[Point], config: Strategy2Config
 ) -> Strategy2Result:
-    # 1. pick two longest polylines
-    pl1, pl2 = pick_two_longest_polylines(polylines)
+    """점 집합에 대해 전략 2를 실행."""
+    # 1. Connected component 찾기
+    components = find_connected_components(points)
 
-    # 2 & 3. find turtle line
-    turtle = find_turtle_line(pl1, pl2)
+    # 2. 가장 긴 두 개의 선 선택
+    comp1, comp2 = pick_two_longest_lines(components)
 
-    # 4. orient turtle line so TLSP is first point
-    turtle_oriented, tlsp = orient_turtle_line(turtle)
+    # 3. 거북이 선 찾기
+    turtle_component = find_turtle_line(comp1, comp2)
 
-    # 5 & 6. find front head and upper head segments
-    all_segments = build_segments(turtle_oriented)
-    front_head = find_first_vertical_segment(
-        all_segments, config.FH, config.vertical_angle_tol_deg
+    # 4. TLSP 찾기 및 경로 정렬
+    tlsp, turtle_path = find_tlsp(turtle_component)
+
+    # 5 & 6. 앞머리끝과 윗머리끝 찾기
+    front_head, upper_head = find_front_head_and_upper_head(
+        turtle_path, config.FH, config.UH
     )
 
-    # For "계속 선을 읽어나간다" we only search AFTER the front_head segment
-    try:
-        start_idx = all_segments.index(front_head) + 1
-    except ValueError:
-        start_idx = 0
-    upper_head = find_first_horizontal_segment(
-        all_segments[start_idx:], config.UH, config.horizontal_angle_tol_deg
-    )
-
-    # 7. compute virtual marker Mv
+    # 7. 가상 마커 Mv 계산
     mv = compute_mv(front_head, upper_head)
 
-    # 8. shifted marker and BSP
-    mv_shifted = (mv[0] + config.SX, mv[1] + config.SY)
-    bsp = find_closest_point_on_polyline(turtle_oriented, mv_shifted)
+    # 8. Mv 평행이동 및 BSP 찾기
+    mv_shifted = (int(round(mv[0] + config.SX)), int(round(mv[1] + config.SY)))
+    bsp = find_bsp(turtle_path, mv_shifted)
 
-    # Determine direction on turtle line
-    # TLSP가 0번 인덱스가 되도록 정렬했으므로,
-    # "TLSP로 이어지는 방향의 반대 방향"은 항상 인덱스가 증가하는 방향으로 본다.
-    bsp_index = turtle_oriented.index(bsp)
-    forward = True  # 항상 TLSP에서 멀어지는 방향(인덱스 증가)
+    # 9. BSP에서 TLSP 방향의 반대 방향으로 경로 탐색
+    bsp_idx = turtle_path.index(bsp)
+    tlsp_idx = turtle_path.index(tlsp)
 
-    bending_points = sample_along_polyline(
-        turtle_oriented,
-        start_index=bsp_index,
-        num_samples=config.PBL,
-        step=max(config.sample_step, 1e-3),
-        forward=forward,
+    # TLSP 방향의 반대 = BSP에서 멀어지는 방향
+    # BSP가 TLSP보다 앞에 있으면 뒤로, 뒤에 있으면 앞으로
+    if bsp_idx < tlsp_idx:
+        # BSP -> ... -> TLSP 방향이므로, 반대는 BSP에서 앞으로
+        sampling_path = turtle_path[bsp_idx:]
+    else:
+        # TLSP -> ... -> BSP 방향이므로, 반대는 BSP에서 뒤로
+        sampling_path = turtle_path[bsp_idx:]
+
+    # PBL개 점 샘플링 (경로의 모든 점 순회 후 1픽셀 간격)
+    bending_points = sample_path_at_intervals(
+        sampling_path, 0, config.PBL, config.sample_step
     )
 
     return Strategy2Result(
         tlsp=tlsp,
-        turtle_line_points=turtle_oriented,
-        front_head_segment=front_head,
-        upper_head_segment=upper_head,
+        turtle_line_path=turtle_path,
+        front_head_run=front_head,
+        upper_head_run=upper_head,
         mv=mv,
         mv_shifted=mv_shifted,
         bsp=bsp,
@@ -237,14 +228,17 @@ def run_strategy2_on_points(
 
 
 def run_strategy2_on_file(path: str, config: Strategy2Config) -> Strategy2Result:
-    polylines = parse_txt_points(path)
-    return run_strategy2_on_points(polylines, config)
+    """TXT 파일에 대해 전략 2를 실행."""
+    points = parse_txt_points(path)
+    return run_strategy2_on_points(points, config)
 
 
 def save_result_points_txt(path: str, result: Strategy2Result) -> None:
-    """Save bending points as TXT: index x y."""
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("# index x y\n")
-        for idx, p in enumerate(result.bending_points, start=1):
-            f.write(f"{idx} {p[0]:.6f} {p[1]:.6f}\n")
+    """결과를 TXT 파일로 저장.
 
+    포맷: x,y (줄 순서가 곧 순서번호 1..PBL)
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# x,y\n")
+        for p in result.bending_points:
+            f.write(f"{p[0]},{p[1]}\n")

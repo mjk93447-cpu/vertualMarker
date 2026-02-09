@@ -34,7 +34,7 @@ from vertualmarker.visualization import visualize_result
 from vertualmarker.data_generator import (
     SyntheticParams,
     generate_turtle_and_partner,
-    save_polylines_txt,
+    save_points_txt,
 )
 
 
@@ -260,10 +260,10 @@ class MainWindow(QMainWindow):
             out_img = base + "_visualization.png"
 
             try:
-                polylines = parse_txt_points(path)
+                original_points = parse_txt_points(path)
                 result = run_strategy2_on_file(path, config)
                 save_result_points_txt(out_txt, result)
-                visualize_result(polylines, result, out_img)
+                visualize_result(original_points, result, out_img)
                 self.log(f"[성공] {os.path.basename(path)} -> {os.path.basename(out_txt)}, {os.path.basename(out_img)}")
                 num_success += 1
             except Strategy2Error as e:
@@ -292,9 +292,9 @@ class MainWindow(QMainWindow):
             return
 
         params = SyntheticParams()
-        polys = generate_turtle_and_partner(params)
+        points = generate_turtle_and_partner(params)
         try:
-            save_polylines_txt(path, polys)
+            save_points_txt(path, points)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "예시 생성 실패", str(e))
             return
