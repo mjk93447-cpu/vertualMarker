@@ -1,4 +1,4 @@
-# vertualMarker
+# virtualMarker
 determine the virtual marker position from the side bending vision edge map
 
 [목적]이 프로그램은 OLED 패널의 PCBL부분의 Bending 공정에서 옆부분을 봤을때 읽을 수 있는 윤곽선에서 항상 일정한 기준점을 설정하기 위한 프로그램으로 여러가지 전략을 통해 정확한 기준점을 찾는다.
