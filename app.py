@@ -140,6 +140,36 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(param_group)
 
+        # Angle tolerance group
+        angle_group = QGroupBox("각도 허용 설정")
+        angle_layout = QHBoxLayout()
+        angle_group.setLayout(angle_layout)
+
+        # Vertical angle tolerance
+        vat_layout = QVBoxLayout()
+        vat_label = QLabel("세로 각도 허용 (deg)")
+        self.spin_v_angle = QDoubleSpinBox()
+        self.spin_v_angle.setRange(0.0, 45.0)
+        self.spin_v_angle.setDecimals(1)
+        self.spin_v_angle.setValue(5.0)
+        vat_layout.addWidget(vat_label)
+        vat_layout.addWidget(self.spin_v_angle)
+        angle_layout.addLayout(vat_layout)
+
+        # Horizontal angle tolerance
+        hat_layout = QVBoxLayout()
+        hat_label = QLabel("가로 각도 허용 (deg)")
+        self.spin_h_angle = QDoubleSpinBox()
+        self.spin_h_angle.setRange(0.0, 45.0)
+        self.spin_h_angle.setDecimals(1)
+        self.spin_h_angle.setValue(5.0)
+        hat_layout.addWidget(hat_label)
+        hat_layout.addWidget(self.spin_h_angle)
+        angle_layout.addLayout(hat_layout)
+
+        angle_layout.addStretch(1)
+        main_layout.addWidget(angle_group)
+
         # Example data generator group
         example_group = QGroupBox("예시 TXT 데이터 생성")
         example_layout = QHBoxLayout()
@@ -223,11 +253,16 @@ class MainWindow(QMainWindow):
             SY=self.spin_sy.value(),
             PBL=self.spin_pbl.value(),
             sample_step=self.spin_step.value(),
+            vertical_angle_tolerance=self.spin_v_angle.value(),
+            horizontal_angle_tolerance=self.spin_h_angle.value(),
         )
 
         self.log(
             f"실행 시작: 파일 {count}개, "
-            f"FH={config.FH}, UH={config.UH}, SX={config.SX}, SY={config.SY}, PBL={config.PBL}, step={config.sample_step}"
+            f"FH={config.FH}, UH={config.UH}, SX={config.SX}, SY={config.SY}, "
+            f"PBL={config.PBL}, step={config.sample_step}, "
+            f"세로각도허용={config.vertical_angle_tolerance}°, "
+            f"가로각도허용={config.horizontal_angle_tolerance}°"
         )
         self.log("=" * 60)
 
@@ -249,6 +284,34 @@ class MainWindow(QMainWindow):
 
                 self.log(f"  - 전략 2 알고리즘 실행 중...")
                 result = run_strategy2_on_file(path, config)
+
+                # 진단 정보 출력
+                diag = result.diagnostics
+                if diag:
+                    self.log(f"  --- 탐색 진단 정보 ---")
+                    self.log(f"  - 총 connected component 수: {diag.get('num_components', '?')}")
+                    pick_info = diag.get("pick_lines", {})
+                    top_comps = pick_info.get("top_components", [])
+                    for tc in top_comps[:3]:
+                        bp = tc["bottom_point"]
+                        self.log(
+                            f"  - 선 #{tc['rank']}: 길이={tc['length']}점, "
+                            f"최하단=({bp[0]},{bp[1]})"
+                        )
+                    self.log(
+                        f"  - 거북이선 특정완료: "
+                        f"최하단=({diag.get('turtle_bottom', ('?','?'))[0]},"
+                        f"{diag.get('turtle_bottom', ('?','?'))[1]}), "
+                        f"길이={diag.get('turtle_component_length', '?')}점"
+                    )
+                    tlsp_info = diag.get("tlsp", {})
+                    self.log(
+                        f"  - TLSP: ({result.tlsp[0]},{result.tlsp[1]}), "
+                        f"경로 길이={tlsp_info.get('path_length', '?')}점, "
+                        f"탐색방법={tlsp_info.get('path_method', '?')}"
+                    )
+                    self.log(f"  --- 진단 정보 끝 ---")
+
                 self.log(f"  - 거북이 선 경로 길이: {len(result.turtle_line_path)}")
                 self.log(f"  - 앞머리 구간: {len(result.front_head_run)} 점")
                 self.log(f"  - 윗머리 구간: {len(result.upper_head_run)} 점")

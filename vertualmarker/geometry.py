@@ -6,7 +6,7 @@
 import math
 from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 Point = Tuple[int, int]  # 픽셀 좌표는 정수
 
@@ -97,115 +97,117 @@ def find_endpoints(component: List[Point]) -> List[Point]:
     return endpoints
 
 
-def find_longest_path(
-    component: List[Point], start: Point, end: Point | None = None
+def find_path_bfs(
+    component: List[Point],
+    start: Point,
+    end: Optional[Point] = None,
 ) -> List[Point]:
-    """시작점에서 끝점까지의 가장 긴 경로를 찾는다.
+    """BFS로 start에서 end까지의 경로를 찾는다.
 
-    DFS로 모든 가능한 경로를 탐색하고 가장 긴 것을 선택.
-    end가 None이면 start에서 가장 먼 점을 찾는다.
+    end가 None이면 start에서 가장 먼(hop count) 점을 찾아 그 경로를 반환.
+    parent 추적을 사용해 O(n) 메모리/시간으로 동작.
     """
     point_set = set(component)
+    visited: Set[Point] = {start}
+    parent: Dict[Point, Optional[Point]] = {start: None}
+    queue = deque([start])
+    farthest = start
+    max_hops = 0
+    hop_count: Dict[Point, int] = {start: 0}
 
-    def dfs(current: Point, visited: Set[Point], path: List[Point]) -> List[Point]:
+    while queue:
+        current = queue.popleft()
+        hops = hop_count[current]
+
         if end is not None and current == end:
-            return path[:]
+            break
 
-        longest_path = path[:]
+        if hops > max_hops:
+            max_hops = hops
+            farthest = current
+
         for neighbor in get_neighbors(current, point_set):
             if neighbor not in visited:
                 visited.add(neighbor)
-                candidate = dfs(neighbor, visited, path + [neighbor])
-                visited.remove(neighbor)
-                if len(candidate) > len(longest_path):
-                    longest_path = candidate
+                parent[neighbor] = current
+                hop_count[neighbor] = hops + 1
+                queue.append(neighbor)
 
-        return longest_path
+    # Determine target
+    target = end if (end is not None and end in parent) else farthest
 
-    if end is None:
-        # start에서 가장 먼 점 찾기
-        max_dist = -1
-        farthest = start
-        for p in component:
-            if p != start:
-                d = distance(start, p)
-                if d > max_dist:
-                    max_dist = d
-                    farthest = p
-        end = farthest
+    # Reconstruct path
+    path: List[Point] = []
+    p: Optional[Point] = target
+    while p is not None:
+        path.append(p)
+        p = parent[p]
+    return path[::-1]
 
-    visited = {start}
-    path = dfs(start, visited, [start])
-    return path
+
+def find_longest_path(
+    component: List[Point], start: Point, end: Optional[Point] = None
+) -> List[Point]:
+    """시작점에서 끝점까지의 경로를 BFS로 찾는다.
+
+    end가 None이면 start에서 가장 먼 점까지의 경로를 반환.
+    """
+    return find_path_bfs(component, start, end)
 
 
 def find_longest_path_with_branching(
-    component: List[Point], start: Point, end: Point | None = None
+    component: List[Point], start: Point, end: Optional[Point] = None
 ) -> List[Point]:
-    """분기점을 고려한 가장 긴 경로 찾기.
+    """BFS를 사용해 start에서 end까지의 경로를 찾는다.
 
-    간단한 접근: 끝점이 있으면 끝점까지, 없으면 가장 먼 점까지.
-    분기점에서는 가장 긴 경로로 이어지는 분기만 선택.
+    end가 None이면 start에서 가장 먼 점까지의 경로를 반환.
+    분기점이 있어도 BFS로 올바른 경로를 찾는다.
     """
-    point_set = set(component)
-
-    if end is None:
-        # start에서 가장 먼 점 찾기
-        max_dist = -1
-        farthest = start
-        for p in component:
-            if p != start:
-                d = distance(start, p)
-                if d > max_dist:
-                    max_dist = d
-                    farthest = p
-        end = farthest
-
-    # DFS로 경로 찾기 (재귀 대신 스택 사용)
-    stack = [(start, [start])]
-    visited: Set[Point] = {start}
-    longest_path: List[Point] = [start]
-
-    while stack:
-        current, path = stack.pop()
-
-        if current == end:
-            if len(path) > len(longest_path):
-                longest_path = path[:]
-            continue
-
-        neighbors = get_neighbors(current, point_set)
-        unvisited_neighbors = [n for n in neighbors if n not in visited]
-        
-        # 분기점이면 가장 긴 경로로 이어지는 이웃만 선택
-        if len(unvisited_neighbors) > 1 and get_degree(current, point_set) >= 3:
-            # 각 이웃으로 가는 경로의 잠재적 길이 추정
-            neighbor_scores = []
-            for neighbor in unvisited_neighbors:
-                # 간단한 휴리스틱: end까지의 거리
-                score = -distance(neighbor, end)
-                neighbor_scores.append((score, neighbor))
-            unvisited_neighbors = [n for _, n in sorted(neighbor_scores, reverse=True)[:1]]
-
-        for neighbor in unvisited_neighbors:
-            visited.add(neighbor)
-            stack.append((neighbor, path + [neighbor]))
-
-    return longest_path if len(longest_path) > 1 else [start]
+    return find_path_bfs(component, start, end)
 
 
-def detect_straight_runs(path: List[Point]) -> List[Tuple[str, List[Point]]]:
+def detect_straight_runs(
+    path: List[Point],
+    angle_tolerance_deg: float = 0.0,
+) -> List[Tuple[str, List[Point]]]:
     """경로에서 직선 구간들을 탐지.
 
     반환: [(direction, points), ...]
     direction: 'horizontal', 'vertical', 'diagonal'
+
+    angle_tolerance_deg > 0 이면 각도 허용 범위 내에서 방향을 결정.
+    예: tolerance=10이면, y축에서 10도 이내는 vertical로 인정.
     """
     if len(path) < 2:
         return []
 
+    tolerance_rad = math.radians(angle_tolerance_deg) if angle_tolerance_deg > 0 else 0.0
+
+    def classify_direction(dx: int, dy: int) -> str:
+        if dx == 0 and dy == 0:
+            return "none"
+
+        if tolerance_rad > 0:
+            # 각도 기반 판정
+            angle = math.atan2(abs(dy), abs(dx))  # 0 = horizontal, pi/2 = vertical
+            if angle >= (math.pi / 2 - tolerance_rad):
+                return "vertical"
+            elif angle <= tolerance_rad:
+                return "horizontal"
+            else:
+                return "diagonal"
+        else:
+            # 정확한 판정
+            if dx == 0:
+                return "vertical"
+            elif dy == 0:
+                return "horizontal"
+            else:
+                return "diagonal"
+
     runs: List[Tuple[str, List[Point]]] = []
     current_run: List[Point] = [path[0]]
-    current_dir: str | None = None
+    current_dir: Optional[str] = None
 
     for i in range(1, len(path)):
         p1 = path[i - 1]
@@ -213,37 +215,45 @@ def detect_straight_runs(path: List[Point]) -> List[Tuple[str, List[Point]]]:
         dx = p2[0] - p1[0]
         dy = p2[1] - p1[1]
 
-        # 방향 결정
-        if dx == 0:
-            direction = "vertical"
-        elif dy == 0:
-            direction = "horizontal"
-        else:
-            direction = "diagonal"
+        direction = classify_direction(dx, dy)
+
+        if direction == "none":
+            # 같은 점 — 현재 구간에 추가
+            current_run.append(p2)
+            continue
 
         if direction == current_dir:
             current_run.append(p2)
         else:
-            if current_dir and len(current_run) >= 2:
+            if current_dir and current_dir != "none" and len(current_run) >= 2:
                 runs.append((current_dir, current_run[:]))
             current_run = [p1, p2]
             current_dir = direction
 
     # 마지막 구간 추가
-    if current_dir and len(current_run) >= 2:
+    if current_dir and current_dir != "none" and len(current_run) >= 2:
         runs.append((current_dir, current_run[:]))
 
     return runs
 
 
 def find_first_vertical_run(
-    path: List[Point], min_length: int
-) -> List[Point] | None:
-    """경로에서 첫 번째 세로 직선 구간을 찾는다.
+    path: List[Point],
+    min_length: int,
+    angle_tolerance_deg: float = 0.0,
+) -> Optional[List[Point]]:
+    """경로에서 첫 번째 (거의) 세로 직선 구간을 찾는다.
 
     min_length: 최소 점 개수
+    angle_tolerance_deg: 각도 허용 범위 (0이면 정확한 세로만)
     """
-    runs = detect_straight_runs(path)
+    # 각도 허용이 있으면 직접 스캔 (더 정확하고 연속된 near-vertical 구간을 잡음)
+    if angle_tolerance_deg > 0:
+        return _find_first_near_direction_run(
+            path, min_length, "vertical", angle_tolerance_deg
+        )
+    # 정확한 매칭
+    runs = detect_straight_runs(path, angle_tolerance_deg=0.0)
     for direction, points in runs:
         if direction == "vertical" and len(points) >= min_length:
             return points
@@ -251,16 +261,75 @@ def find_first_vertical_run(
 
 
 def find_first_horizontal_run(
-    path: List[Point], min_length: int
-) -> List[Point] | None:
-    """경로에서 첫 번째 가로 직선 구간을 찾는다.
+    path: List[Point],
+    min_length: int,
+    angle_tolerance_deg: float = 0.0,
+) -> Optional[List[Point]]:
+    """경로에서 첫 번째 (거의) 가로 직선 구간을 찾는다.
 
     min_length: 최소 점 개수
+    angle_tolerance_deg: 각도 허용 범위 (0이면 정확한 가로만)
     """
-    runs = detect_straight_runs(path)
+    if angle_tolerance_deg > 0:
+        return _find_first_near_direction_run(
+            path, min_length, "horizontal", angle_tolerance_deg
+        )
+    runs = detect_straight_runs(path, angle_tolerance_deg=0.0)
     for direction, points in runs:
         if direction == "horizontal" and len(points) >= min_length:
             return points
+    return None
+
+
+def _find_first_near_direction_run(
+    path: List[Point],
+    min_length: int,
+    target_direction: str,
+    angle_tolerance_deg: float,
+) -> Optional[List[Point]]:
+    """경로에서 첫 번째 near-vertical 또는 near-horizontal 연속 구간을 찾는다.
+
+    개별 스텝의 각도를 확인하여 허용 범위 내이면 해당 방향으로 누적.
+    연속으로 누적된 점의 수가 min_length 이상이면 반환.
+    """
+    if len(path) < 2:
+        return None
+
+    tolerance_rad = math.radians(angle_tolerance_deg)
+
+    current_run: List[Point] = [path[0]]
+
+    for i in range(1, len(path)):
+        dx = path[i][0] - path[i - 1][0]
+        dy = path[i][1] - path[i - 1][1]
+
+        if dx == 0 and dy == 0:
+            current_run.append(path[i])
+            continue
+
+        is_match = False
+        if target_direction == "vertical":
+            # near-vertical: angle from y-axis <= tolerance
+            if dy != 0:
+                angle_from_y = abs(math.atan2(abs(dx), abs(dy)))
+                is_match = angle_from_y <= tolerance_rad
+            # dy == 0 이면 완전 수평이므로 vertical이 아님
+        elif target_direction == "horizontal":
+            # near-horizontal: angle from x-axis <= tolerance
+            if dx != 0:
+                angle_from_x = abs(math.atan2(abs(dy), abs(dx)))
+                is_match = angle_from_x <= tolerance_rad
+            # dx == 0 이면 완전 수직이므로 horizontal이 아님
+
+        if is_match:
+            current_run.append(path[i])
+        else:
+            if len(current_run) >= min_length:
+                return current_run
+            current_run = [path[i]]
+
+    if len(current_run) >= min_length:
+        return current_run
     return None
 
 

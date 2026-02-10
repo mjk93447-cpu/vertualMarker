@@ -6,8 +6,9 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Tuple
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 from .geometry import (
     Point,
@@ -17,10 +18,12 @@ from .geometry import (
     find_endpoints,
     find_first_horizontal_run,
     find_first_vertical_run,
-    find_longest_path_with_branching,
+    find_path_bfs,
     get_neighbors,
     sample_path_at_intervals,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,6 +34,8 @@ class Strategy2Config:
     SY: float  # Shift in y for virtual marker
     PBL: int  # Panel bending length (출력 포인트 개수)
     sample_step: float = 1.0  # 샘플링 간격 (픽셀)
+    vertical_angle_tolerance: float = 5.0  # 세로 각도 허용 (도)
+    horizontal_angle_tolerance: float = 5.0  # 가로 각도 허용 (도)
 
 
 @dataclass
@@ -43,6 +48,7 @@ class Strategy2Result:
     mv_shifted: Point
     bsp: Point
     bending_points: List[Point]  # 순서번호 1..PBL에 해당하는 점들
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
 class Strategy2Error(Exception):
@@ -90,106 +96,124 @@ def parse_txt_points(path: str) -> List[Point]:
     return points
 
 
-def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], List[Point]]:
+def pick_two_longest_lines(
+    components: List[List[Point]],
+) -> Tuple[List[Point], List[Point], Dict[str, Any]]:
     """Connected component들 중 점 개수가 가장 많은 상위 2개를 선택.
-    
-    만약 거북이 선이 여러 component로 분리되어 있으면 (예: 앞머리+본체),
-    가장 긴 component와 그와 가까운 component를 합쳐서 하나의 선으로 처리.
+
+    반환: (comp1, comp2, diagnostics)
+    diagnostics에 상위 component 정보 포함.
     """
     if len(components) < 2:
-        raise Strategy2Error("최소 두 개의 연결된 선이 필요합니다.")
+        raise Strategy2Error(
+            f"최소 두 개의 연결된 선이 필요합니다. (발견: {len(components)}개)"
+        )
 
-    # 점 개수로 정렬
-    lengths = [(len(comp), i) for i, comp in enumerate(components)]
-    lengths.sort(reverse=True)
-
-    idx1 = lengths[0][1]
-    idx2 = lengths[1][1]
-    
-    comp1 = components[idx1]
-    comp2 = components[idx2]
-    
-    # 두 component가 가까이 있으면 합치기 (거북이 선이 분리된 경우 처리)
-    # 간단한 휴리스틱: 두 component의 최소 거리가 작으면 합침
-    min_dist = min(
-        distance(p1, p2) for p1 in comp1 for p2 in comp2
+    # 점 개수로 정렬 (내림차순)
+    sorted_comps = sorted(
+        enumerate(components), key=lambda t: len(t[1]), reverse=True
     )
-    if min_dist < 10:  # 10픽셀 이내면 합침
-        merged = comp1 + comp2
-        # 나머지 component 중 가장 긴 것 찾기
-        remaining = [components[i] for i, (_, idx) in enumerate(lengths) if idx not in [idx1, idx2]]
-        if remaining:
-            comp2 = max(remaining, key=len)
-        else:
-            # 두 번째 component가 없으면 첫 번째만 반환 (하지만 함수 시그니처상 두 개 필요)
-            comp2 = comp1[:]
-        return merged, comp2
-    
-    return comp1, comp2
+
+    idx1, comp1 = sorted_comps[0]
+    idx2, comp2 = sorted_comps[1]
+
+    # 진단 정보: 상위 component들의 정보
+    diag: Dict[str, Any] = {
+        "num_components": len(components),
+        "top_components": [],
+    }
+    for rank, (orig_idx, comp) in enumerate(sorted_comps[:5]):
+        bottom_point = max(comp, key=lambda p: p[1])
+        diag["top_components"].append(
+            {
+                "rank": rank + 1,
+                "original_index": orig_idx,
+                "length": len(comp),
+                "bottom_point": bottom_point,
+            }
+        )
+
+    return comp1, comp2, diag
 
 
-def find_turtle_line(comp1: List[Point], comp2: List[Point]) -> List[Point]:
+def find_turtle_line(
+    comp1: List[Point], comp2: List[Point]
+) -> Tuple[List[Point], List[Point]]:
     """두 component 중 거북이 선을 찾는다.
 
-    거북이 선: 가장 아래(y 최대)인 점을 포함하는 component.
+    거북이 선: y축 방향에서 가장 아래(y 최대)인 점 두개 중 더 아래인
+    점을 포함하고 있는 선.
+
+    반환: (turtle_component, other_component)
     """
-    all_points = [(p, 1) for p in comp1] + [(p, 2) for p in comp2]
-    lowest_point, which = max(all_points, key=lambda t: t[0][1])
-    return comp1 if which == 1 else comp2
+    bottom1 = max(comp1, key=lambda p: p[1])
+    bottom2 = max(comp2, key=lambda p: p[1])
+
+    if bottom1[1] >= bottom2[1]:
+        return comp1, comp2
+    else:
+        return comp2, comp1
 
 
-def find_tlsp(turtle_component: List[Point]) -> Tuple[Point, List[Point]]:
+def find_tlsp(
+    turtle_component: List[Point],
+) -> Tuple[Point, List[Point], Dict[str, Any]]:
     """거북이 선의 TLSP를 찾고 경로를 정렬한다.
 
     TLSP: 끝점 중 더 아래(y 최대)인 점.
-    순환 구조나 분기점이 있으면 예외처리.
+
+    BFS를 사용해 TLSP에서 가장 먼 점까지의 경로를 찾는다.
+    이 방식은 분기점이 있어도 올바르게 동작한다.
+
+    반환: (tlsp, path, diagnostics)
     """
-    # 가장 아래(y 최대)인 점 찾기
-    max_y_point = max(turtle_component, key=lambda p: p[1])
-    max_y = max_y_point[1]
-    
-    # 같은 y값을 가진 점들 중에서 끝점 찾기
-    candidates = [p for p in turtle_component if p[1] == max_y]
-    
+    diag: Dict[str, Any] = {}
+
+    # 끝점 찾기
     endpoints = find_endpoints(turtle_component)
+    diag["num_endpoints"] = len(endpoints)
+
     if endpoints:
-        # 끝점 중에서 가장 아래인 것 선택
-        tlsp_candidates = [ep for ep in endpoints if ep[1] == max_y]
-        if tlsp_candidates:
-            tlsp = tlsp_candidates[0]
-        else:
-            # 끝점 중 가장 아래
-            tlsp = max(endpoints, key=lambda p: p[1])
+        # 끝점 중 가장 아래(y 최대)인 것을 TLSP로 선택
+        tlsp = max(endpoints, key=lambda p: p[1])
     else:
         # 순환 구조: 가장 아래 점 선택
-        tlsp = max_y_point
-    
-    # 다른 끝점 찾기
-    other_endpoints = [ep for ep in endpoints if ep != tlsp] if endpoints else []
-    if other_endpoints:
-        end_point = other_endpoints[0]
-    else:
-        # 끝점이 없으면 가장 먼 점 찾기
-        end_point = max(
-            turtle_component,
-            key=lambda p: distance(tlsp, p) if p != tlsp else -1,
-        )
-    
-    # TLSP에서 end_point까지의 경로 찾기
-    try:
-        path = find_longest_path_with_branching(turtle_component, tlsp, end_point)
-    except Exception:
-        # 실패 시 간단한 경로 사용
-        path = _build_ordered_path(turtle_component, tlsp)
+        tlsp = max(turtle_component, key=lambda p: p[1])
+
+    diag["tlsp"] = tlsp
+
+    # BFS로 TLSP에서 가장 먼 점까지의 경로를 찾는다.
+    # 이것이 거북이 선의 "주 경로(main chain)"이 된다.
+    path = find_path_bfs(turtle_component, tlsp, end=None)
+    diag["path_length"] = len(path)
+    diag["path_end_point"] = path[-1] if path else None
 
     if len(path) < 2:
-        raise Strategy2Error("거북이 선 경로가 너무 짧습니다.")
+        # 혹시 BFS가 실패하면 (거의 불가능하지만), 그리디 방식 시도
+        path = _build_ordered_path(turtle_component, tlsp)
+        diag["path_method"] = "greedy_fallback"
+        diag["path_length"] = len(path)
+    else:
+        diag["path_method"] = "bfs"
 
-    return tlsp, path
+    if len(path) < 2:
+        raise Strategy2Error(
+            f"거북이 선 경로가 너무 짧습니다. "
+            f"(component 점 수: {len(turtle_component)}, "
+            f"경로 길이: {len(path)}, TLSP: {tlsp})"
+        )
+
+    return tlsp, path, diag
 
 
-def _build_ordered_path(component: List[Point], start: Point) -> List[Point]:
-    """순서대로 경로 생성: 시작점에서 연결된 점들을 순차적으로 따라가며 경로 생성."""
+def _build_ordered_path(
+    component: List[Point], start: Point
+) -> List[Point]:
+    """순서대로 경로 생성: 시작점에서 연결된 점들을 순차적으로 따라가며 경로 생성.
+
+    분기점에서는 방향 연속성을 우선하고, 그래도 안 되면
+    미방문 이웃 중 가장 아래(y 최대)쪽으로 이동.
+    """
     from typing import Set
 
     point_set = set(component)
@@ -197,19 +221,13 @@ def _build_ordered_path(component: List[Point], start: Point) -> List[Point]:
     visited: Set[Point] = {start}
     current = start
 
-    # 시작점에서 끝점까지 순차적으로 따라가기
     while True:
         neighbors = get_neighbors(current, point_set)
         unvisited_neighbors = [n for n in neighbors if n not in visited]
-        
+
         if not unvisited_neighbors:
             break
-        
-        # 다음 점 선택 전략:
-        # 1. 이웃이 1개면 그대로 선택
-        # 2. 여러 이웃이 있으면:
-        #    - 현재 방향과 일치하는 이웃 우선
-        #    - 없으면 가장 가까운 이웃
+
         if len(unvisited_neighbors) == 1:
             next_point = unvisited_neighbors[0]
         else:
@@ -226,16 +244,28 @@ def _build_ordered_path(component: List[Point], start: Point) -> List[Point]:
                     if (
                         n[0] - current[0],
                         n[1] - current[1],
-                    ) == prev_dir
+                    )
+                    == prev_dir
                 ]
                 if same_dir_neighbors:
                     next_point = same_dir_neighbors[0]
                 else:
-                    # 방향이 다르면 첫 번째 이웃 선택
-                    next_point = unvisited_neighbors[0]
+                    # 비슷한 방향 (같은 부호)의 이웃 찾기
+                    similar_dir_neighbors = []
+                    for n in unvisited_neighbors:
+                        nd = (n[0] - current[0], n[1] - current[1])
+                        # 방향 유사도 점수
+                        score = (
+                            (1 if (nd[0] > 0) == (prev_dir[0] > 0) and prev_dir[0] != 0 else 0)
+                            + (1 if (nd[1] > 0) == (prev_dir[1] > 0) and prev_dir[1] != 0 else 0)
+                        )
+                        similar_dir_neighbors.append((score, n))
+                    similar_dir_neighbors.sort(key=lambda t: t[0], reverse=True)
+                    next_point = similar_dir_neighbors[0][1]
             else:
-                next_point = unvisited_neighbors[0]
-        
+                # 경로가 짧으면 y가 작아지는 방향 (위로 올라가는 방향) 우선
+                next_point = min(unvisited_neighbors, key=lambda p: p[1])
+
         visited.add(next_point)
         path.append(next_point)
         current = next_point
@@ -244,21 +274,65 @@ def _build_ordered_path(component: List[Point], start: Point) -> List[Point]:
 
 
 def find_front_head_and_upper_head(
-    path: List[Point], fh: int, uh: int
+    path: List[Point],
+    fh: int,
+    uh: int,
+    vertical_angle_tolerance: float = 5.0,
+    horizontal_angle_tolerance: float = 5.0,
 ) -> Tuple[List[Point], List[Point]]:
-    """거북이 선 경로에서 앞머리끝과 윗머리끝 직선 구간을 찾는다."""
+    """거북이 선 경로에서 앞머리끝과 윗머리끝 직선 구간을 찾는다.
+
+    각도 허용 범위를 적용하여 near-vertical/near-horizontal 구간을 인식.
+    """
     # 앞머리끝: 세로 직선 구간 (점 개수 >= FH)
-    front_head = find_first_vertical_run(path, int(fh))
+    front_head = find_first_vertical_run(
+        path, int(fh), angle_tolerance_deg=vertical_angle_tolerance
+    )
     if not front_head:
-        raise Strategy2Error(f"조건을 만족하는 세로(FH={fh}) 구간을 찾지 못했습니다.")
+        # 허용 각도를 넓혀서 재시도
+        front_head = find_first_vertical_run(
+            path, int(fh), angle_tolerance_deg=max(vertical_angle_tolerance * 2, 15.0)
+        )
+    if not front_head:
+        raise Strategy2Error(
+            f"조건을 만족하는 세로(FH={fh}) 구간을 찾지 못했습니다. "
+            f"(경로 길이: {len(path)}, 각도 허용: {vertical_angle_tolerance}도)"
+        )
 
     # 앞머리끝 이후 경로에서 윗머리끝 찾기
-    front_head_end_idx = path.index(front_head[-1])
-    remaining_path = path[front_head_end_idx + 1 :]
+    # front_head의 마지막 점이 경로에서 어디에 있는지 찾기
+    front_head_end_idx = -1
+    front_head_last = front_head[-1]
+    for idx, p in enumerate(path):
+        if p == front_head_last:
+            front_head_end_idx = idx
+            break
 
-    upper_head = find_first_horizontal_run(remaining_path, int(uh))
+    if front_head_end_idx < 0:
+        # 정확히 일치하는 점이 없으면, 가장 가까운 점 사용
+        min_dist = float("inf")
+        for idx, p in enumerate(path):
+            d = distance(p, front_head_last)
+            if d < min_dist:
+                min_dist = d
+                front_head_end_idx = idx
+
+    remaining_path = path[front_head_end_idx + 1:]
+
+    upper_head = find_first_horizontal_run(
+        remaining_path, int(uh), angle_tolerance_deg=horizontal_angle_tolerance
+    )
     if not upper_head:
-        raise Strategy2Error(f"조건을 만족하는 가로(UH={uh}) 구간을 찾지 못했습니다.")
+        # 허용 각도를 넓혀서 재시도
+        upper_head = find_first_horizontal_run(
+            remaining_path, int(uh), angle_tolerance_deg=max(horizontal_angle_tolerance * 2, 15.0)
+        )
+    if not upper_head:
+        raise Strategy2Error(
+            f"조건을 만족하는 가로(UH={uh}) 구간을 찾지 못했습니다. "
+            f"(앞머리 이후 경로 길이: {len(remaining_path)}, "
+            f"각도 허용: {horizontal_angle_tolerance}도)"
+        )
 
     return front_head, upper_head
 
@@ -283,21 +357,63 @@ def run_strategy2_on_points(
     points: List[Point], config: Strategy2Config
 ) -> Strategy2Result:
     """점 집합에 대해 전략 2를 실행."""
+    all_diagnostics: Dict[str, Any] = {}
+
     # 1. Connected component 찾기
     components = find_connected_components(points)
+    all_diagnostics["num_components"] = len(components)
 
     # 2. 가장 긴 두 개의 선 선택
-    comp1, comp2 = pick_two_longest_lines(components)
+    comp1, comp2, pick_diag = pick_two_longest_lines(components)
+    all_diagnostics["pick_lines"] = pick_diag
+
+    # 가장 긴 두 선 정보 로그
+    comp1_bottom = max(comp1, key=lambda p: p[1])
+    comp2_bottom = max(comp2, key=lambda p: p[1])
+    all_diagnostics["line1_length"] = len(comp1)
+    all_diagnostics["line1_bottom"] = comp1_bottom
+    all_diagnostics["line2_length"] = len(comp2)
+    all_diagnostics["line2_bottom"] = comp2_bottom
+
+    logger.info(
+        "가장 긴 선 #1: 길이=%d, 최하단=(%d,%d)",
+        len(comp1), comp1_bottom[0], comp1_bottom[1],
+    )
+    logger.info(
+        "가장 긴 선 #2: 길이=%d, 최하단=(%d,%d)",
+        len(comp2), comp2_bottom[0], comp2_bottom[1],
+    )
 
     # 3. 거북이 선 찾기
-    turtle_component = find_turtle_line(comp1, comp2)
+    turtle_component, other_component = find_turtle_line(comp1, comp2)
+    turtle_bottom = max(turtle_component, key=lambda p: p[1])
+    all_diagnostics["turtle_component_length"] = len(turtle_component)
+    all_diagnostics["turtle_bottom"] = turtle_bottom
+    logger.info(
+        "거북이 선 선택: 길이=%d, 최하단=(%d,%d)",
+        len(turtle_component), turtle_bottom[0], turtle_bottom[1],
+    )
 
     # 4. TLSP 찾기 및 경로 정렬
-    tlsp, turtle_path = find_tlsp(turtle_component)
+    tlsp, turtle_path, tlsp_diag = find_tlsp(turtle_component)
+    all_diagnostics["tlsp"] = tlsp_diag
+
+    logger.info(
+        "거북이선 특정완료: TLSP=(%d,%d), 전체 경로 길이=%d픽셀, "
+        "경로 끝점=(%d,%d), 탐색방법=%s",
+        tlsp[0], tlsp[1],
+        len(turtle_path),
+        turtle_path[-1][0], turtle_path[-1][1],
+        tlsp_diag.get("path_method", "unknown"),
+    )
 
     # 5 & 6. 앞머리끝과 윗머리끝 찾기
     front_head, upper_head = find_front_head_and_upper_head(
-        turtle_path, config.FH, config.UH
+        turtle_path,
+        config.FH,
+        config.UH,
+        vertical_angle_tolerance=config.vertical_angle_tolerance,
+        horizontal_angle_tolerance=config.horizontal_angle_tolerance,
     )
 
     # 7. 가상 마커 Mv 계산
@@ -312,15 +428,16 @@ def run_strategy2_on_points(
     tlsp_idx = turtle_path.index(tlsp)
 
     # TLSP 방향의 반대 = BSP에서 멀어지는 방향
-    # BSP가 TLSP보다 앞에 있으면 뒤로, 뒤에 있으면 앞으로
     if bsp_idx < tlsp_idx:
-        # BSP -> ... -> TLSP 방향이므로, 반대는 BSP에서 앞으로
+        # BSP -> ... -> TLSP 방향이므로, 반대는 BSP에서 앞으로 (인덱스 감소 방향)
+        # 하지만 경로는 TLSP에서 시작하므로 bsp_idx가 TLSP보다 뒤에 있음
+        # 반대 방향 = bsp_idx에서 경로 끝 방향
         sampling_path = turtle_path[bsp_idx:]
     else:
-        # TLSP -> ... -> BSP 방향이므로, 반대는 BSP에서 뒤로
+        # TLSP -> ... -> BSP 방향이므로, 반대는 BSP에서 경로 끝 방향
         sampling_path = turtle_path[bsp_idx:]
 
-    # PBL개 점 샘플링 (경로의 모든 점 순회 후 1픽셀 간격)
+    # PBL개 점 샘플링
     bending_points = sample_path_at_intervals(
         sampling_path, 0, config.PBL, config.sample_step
     )
@@ -334,6 +451,7 @@ def run_strategy2_on_points(
         mv_shifted=mv_shifted,
         bsp=bsp,
         bending_points=bending_points,
+        diagnostics=all_diagnostics,
     )
 
 
