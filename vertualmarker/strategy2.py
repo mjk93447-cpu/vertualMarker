@@ -36,7 +36,7 @@ class Strategy2Config:
 @dataclass
 class Strategy2Result:
     tlsp: Point
-    turtle_line_path: List[Point]  # 거북이 선의 경로 (순서대로)
+    turtle_line_path: List[Point]  # 거북이 선의 경로 (TLSP 기준 순서)
     front_head_run: List[Point]  # 거북이 앞머리끝 직선 구간
     upper_head_run: List[Point]  # 거북이 윗머리끝 직선 구간
     mv: Point  # 가상 마커
@@ -88,7 +88,7 @@ def parse_txt_points(path: str) -> List[Point]:
                 continue
 
     if not points:
-        raise Strategy2Error("입력 txt 파일에서 좌표를 찾을 수 없습니다.")
+        raise Strategy2Error("No valid coordinates were found in the input TXT file.")
 
     return points
 
@@ -100,7 +100,7 @@ def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], 
     가장 긴 component와 그와 가까운 component를 합쳐서 하나의 선으로 처리.
     """
     if len(components) < 2:
-        raise Strategy2Error("최소 두 개의 연결된 선이 필요합니다.")
+        raise Strategy2Error("At least two connected line components are required.")
 
     # 점 개수로 정렬
     lengths = [(len(comp), i) for i, comp in enumerate(components)]
@@ -255,7 +255,7 @@ def find_tlsp(turtle_component: List[Point]) -> Tuple[Point, List[Point]]:
         path = _build_ordered_path(turtle_component, tlsp)
 
     if len(path) < 2:
-        raise Strategy2Error("거북이 선 경로가 너무 짧습니다.")
+        raise Strategy2Error("Turtle-line path is too short.")
 
     return tlsp, path
 
@@ -322,7 +322,9 @@ def find_front_head_and_upper_head(
     # 앞머리끝: 세로 직선 구간 (점 개수 >= FH)
     front_head = find_first_vertical_run(path, int(fh))
     if not front_head:
-        raise Strategy2Error(f"조건을 만족하는 세로(FH={fh}) 구간을 찾지 못했습니다.")
+        raise Strategy2Error(
+            f"Unable to find a vertical segment satisfying FH={fh}."
+        )
 
     # 앞머리끝 이후 경로에서 윗머리끝 찾기
     front_head_end_idx = path.index(front_head[-1])
@@ -330,7 +332,9 @@ def find_front_head_and_upper_head(
 
     upper_head = find_first_horizontal_run(remaining_path, int(uh))
     if not upper_head:
-        raise Strategy2Error(f"조건을 만족하는 가로(UH={uh}) 구간을 찾지 못했습니다.")
+        raise Strategy2Error(
+            f"Unable to find a horizontal segment satisfying UH={uh}."
+        )
 
     return front_head, upper_head
 
@@ -346,7 +350,7 @@ def compute_mv(front_head: List[Point], upper_head: List[Point]) -> Point:
 def find_bsp(turtle_path: List[Point], mv_shifted: Point) -> Point:
     """BSP 찾기: 거북이 선의 점 중 mv_shifted에 가장 가까운 점."""
     if not turtle_path:
-        raise Strategy2Error("거북이 선 경로가 비어있습니다.")
+        raise Strategy2Error("Turtle-line path is empty.")
 
     return min(turtle_path, key=lambda p: distance(p, mv_shifted))
 
@@ -431,9 +435,11 @@ def run_strategy2_on_file(path: str, config: Strategy2Config) -> Strategy2Result
 def save_result_points_txt(path: str, result: Strategy2Result) -> None:
     """결과를 TXT 파일로 저장.
 
-    포맷: x,y (줄 순서가 곧 순서번호 1..PBL)
+    포맷: x,y,index
+    - index는 1..PBL 순서번호를 명시적으로 저장
+    - 비디오/시계열 후처리에서 frame 간 motion 변화 추적에 사용 가능
     """
     with open(path, "w", encoding="utf-8") as f:
-        f.write("# x,y\n")
-        for p in result.bending_points:
-            f.write(f"{p[0]},{p[1]}\n")
+        f.write("# x,y,index\n")
+        for idx, p in enumerate(result.bending_points, start=1):
+            f.write(f"{p[0]},{p[1]},{idx}\n")
