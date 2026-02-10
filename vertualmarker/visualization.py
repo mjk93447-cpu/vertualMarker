@@ -1,9 +1,9 @@
-"""시각화 모듈.
+"""Visualization module for Strategy 2 outputs.
 
-ver5 방향:
-- 선/점 두께를 얇게 유지해 edge 형태를 더 정확히 관찰
-- 색상은 고대비 스펙트럼(turbo) 기반으로 인덱스 구분 강화
-- 핵심 포인트(TLSP/BSP/Mv/Mv_shifted)에 도형 + 태그를 명확히 표시
+ver7 focus:
+- Improve overlap readability by shrinking critical markers and using transparency.
+- Keep a clean, professional style with subtle gray grid lines for coordinate comparison.
+- Minimize non-essential decoration while preserving interpretability.
 """
 from typing import List
 
@@ -18,25 +18,27 @@ def visualize_result(
     result: Strategy2Result,
     out_path: str,
 ) -> None:
-    """거북이 선과 bending 포인트를 시각화."""
+    """Visualize turtle-line geometry and indexed bending trajectory."""
+    plt.style.use("seaborn-v0_8-whitegrid")
     fig, ax = plt.subplots(figsize=(10, 8))
+    ax.set_facecolor("#FAFAFB")
 
-    # 원본 edge 점: 얇고 투명하게 표시하여 배경 윤곽을 보존
+    # Original edge points: keep very light so structure remains visible.
     if original_points:
         ox = [p[0] for p in original_points]
         oy = [p[1] for p in original_points]
         ax.scatter(
             ox,
             oy,
-            color="#BDBDBD",
-            s=0.8,
-            alpha=0.22,
+            color="#B6BBC6",
+            s=0.55,
+            alpha=0.18,
             linewidths=0.0,
             label="Original edge points",
             zorder=1,
         )
 
-    # 거북이 선: 원본 대비 살짝 강조하되 과도하게 두껍지 않게 표시
+    # Turtle line: thin but crisp path guide.
     tl = result.turtle_line_path
     if len(tl) >= 2:
         xs = [p[0] for p in tl]
@@ -44,14 +46,14 @@ def visualize_result(
         ax.plot(
             xs,
             ys,
-            color="#1F77B4",
-            linewidth=0.85,
+            color="#2B6CB0",
+            linewidth=0.72,
             label="Turtle line",
-            alpha=0.95,
+            alpha=0.88,
             zorder=3,
         )
 
-    # Bending points: turbo 스펙트럼으로 연속 순번의 변화량 가시화
+    # Bending points: use modern high-contrast spectral map with transparent markers.
     if result.bending_points:
         bx = [p[0] for p in result.bending_points]
         by = [p[1] for p in result.bending_points]
@@ -61,107 +63,123 @@ def visualize_result(
             by,
             c=indices,
             cmap="turbo",
-            s=8,
+            s=4.5,
+            alpha=0.72,
             label="Bending points (1..PBL)",
             linewidths=0.0,
             zorder=5,
+            rasterized=True,
         )
         cbar = fig.colorbar(sc, ax=ax)
         cbar.set_label("Bending index")
+        cbar.ax.tick_params(labelsize=8, colors="#4B5563")
 
-    # 핵심 포인트: 기호 + 태그를 같이 그려 사용자 해석성을 높인다.
+    # Critical key points: make symbols compact so lines remain visible on overlap.
     ax.scatter(
         [result.tlsp[0]],
         [result.tlsp[1]],
-        color="#D62728",
-        s=62,
+        color="#C62828",
+        s=19,
+        alpha=0.82,
         marker="v",
         label="TLSP",
         zorder=10,
-        edgecolors="white",
-        linewidths=0.8,
+        edgecolors="none",
+        linewidths=0.0,
     )
     ax.annotate(
         "TLSP",
         xy=result.tlsp,
-        xytext=(6, -10),
+        xytext=(8, -10),
         textcoords="offset points",
-        fontsize=8,
-        color="#D62728",
-        weight="bold",
+        fontsize=7,
+        color="#A61B1B",
+        weight="semibold",
+        alpha=0.92,
+        bbox={"boxstyle": "round,pad=0.12", "fc": "#FAFAFB", "ec": "none", "alpha": 0.72},
     )
 
     ax.scatter(
         [result.bsp[0]],
         [result.bsp[1]],
-        color="#FF7F0E",
-        s=62,
+        color="#DD6B20",
+        s=19,
+        alpha=0.82,
         marker="D",
         label="BSP",
         zorder=10,
-        edgecolors="white",
-        linewidths=0.8,
+        edgecolors="none",
+        linewidths=0.0,
     )
     ax.annotate(
         "BSP",
         xy=result.bsp,
-        xytext=(6, 8),
+        xytext=(12, -1),
         textcoords="offset points",
-        fontsize=8,
-        color="#FF7F0E",
-        weight="bold",
+        fontsize=7,
+        color="#B45309",
+        weight="semibold",
+        alpha=0.92,
+        bbox={"boxstyle": "round,pad=0.12", "fc": "#FAFAFB", "ec": "none", "alpha": 0.72},
     )
 
     ax.scatter(
         [result.mv[0]],
         [result.mv[1]],
-        color="#9467BD",
-        s=58,
+        color="#6B46C1",
+        s=18,
+        alpha=0.82,
         marker="P",
         label="Mv",
         zorder=10,
-        edgecolors="white",
-        linewidths=0.8,
+        edgecolors="none",
+        linewidths=0.0,
     )
     ax.annotate(
         "Mv",
         xy=result.mv,
-        xytext=(7, -8),
+        xytext=(8, 10),
         textcoords="offset points",
-        fontsize=8,
-        color="#9467BD",
-        weight="bold",
+        fontsize=7,
+        color="#5B21B6",
+        weight="semibold",
+        alpha=0.92,
+        bbox={"boxstyle": "round,pad=0.12", "fc": "#FAFAFB", "ec": "none", "alpha": 0.72},
     )
 
     ax.scatter(
         [result.mv_shifted[0]],
         [result.mv_shifted[1]],
-        color="#E377C2",
-        s=54,
+        color="#C026D3",
+        s=15,
+        alpha=0.78,
         marker="x",
         label="Mv shifted",
         zorder=10,
-        linewidths=1.2,
+        linewidths=0.95,
     )
     ax.annotate(
         "Mv'",
         xy=result.mv_shifted,
-        xytext=(7, 8),
+        xytext=(-24, 8),
         textcoords="offset points",
-        fontsize=8,
-        color="#E377C2",
-        weight="bold",
+        fontsize=7,
+        color="#A21CAF",
+        weight="semibold",
+        alpha=0.9,
+        bbox={"boxstyle": "round,pad=0.12", "fc": "#FAFAFB", "ec": "none", "alpha": 0.72},
     )
 
-    # 앞머리/윗머리 검출 구간
+    # FH/UH detected runs: keep visible but not dominant.
     if result.front_head_run:
         fh_x = [p[0] for p in result.front_head_run]
         fh_y = [p[1] for p in result.front_head_run]
         ax.plot(
             fh_x,
             fh_y,
-            color="#2CA02C",
-            linewidth=1.25,
+            color="#2E8B57",
+            linewidth=0.98,
+            alpha=0.9,
             label="Front head (FH)",
             zorder=8,
         )
@@ -172,19 +190,43 @@ def visualize_result(
         ax.plot(
             uh_x,
             uh_y,
-            color="#8C564B",
-            linewidth=1.25,
+            color="#6D4C41",
+            linewidth=0.98,
+            alpha=0.9,
             label="Upper head (UH)",
             zorder=8,
         )
 
     ax.set_aspect("equal", adjustable="datalim")
-    ax.invert_yaxis()  # 이미지 좌표계 (y가 아래로 증가)
+    ax.invert_yaxis()  # Image coordinates: y increases downward.
     ax.set_xlabel("X (pixel)")
     ax.set_ylabel("Y (pixel)")
-    ax.set_title("Strategy 2 - Turtle Line and Bending Trajectory")
-    ax.legend(loc="best", fontsize=8, framealpha=0.9)
-    ax.grid(True, alpha=0.15, linewidth=0.5)
+    ax.set_title("Strategy 2 - Turtle Geometry and Indexed Trajectory", fontsize=11)
+    ax.minorticks_on()
+    ax.grid(
+        which="major",
+        color="#D7DBE3",
+        linestyle="-",
+        linewidth=0.55,
+        alpha=0.38,
+    )
+    ax.grid(
+        which="minor",
+        color="#E8EBF1",
+        linestyle="-",
+        linewidth=0.42,
+        alpha=0.26,
+    )
+    ax.legend(
+        loc="best",
+        fontsize=7.5,
+        framealpha=0.88,
+        facecolor="#FCFCFD",
+        edgecolor="#D3D7DE",
+    )
+    for spine in ax.spines.values():
+        spine.set_color("#C5CAD3")
+        spine.set_linewidth(0.8)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=200, bbox_inches="tight")

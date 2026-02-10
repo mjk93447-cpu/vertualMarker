@@ -40,7 +40,7 @@ from vertualmarker.data_generator import (
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Virtual Marker v6 - Strategy 2 Workbench")
+        self.setWindowTitle("Virtual Marker v7 - Strategy 2 Workbench")
         self.resize(1200, 820)
 
         central = QWidget()
@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         self._apply_professional_theme()
 
-        title = QLabel("Virtual Marker v6 - Strategy 2 (Turtle Head)")
+        title = QLabel("Virtual Marker v7 - Strategy 2 (Turtle Head)")
         title.setObjectName("TitleLabel")
         subtitle = QLabel(
             "Analyze edge-map TXT points, detect turtle-line geometry, and export "
