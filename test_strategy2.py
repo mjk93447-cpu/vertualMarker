@@ -360,6 +360,80 @@ def test_fragmented_with_noise():
     return True
 
 
+def test_fragmented_turtle_line():
+    """Test that a fragmented turtle line (split with small gap) gets merged."""
+    print("\n" + "=" * 60)
+    print("TEST 7: Fragmented turtle line with gap")
+    print("=" * 60)
+
+    # Turtle line split into two parts with a ~2-pixel gap
+    # Part 1: vertical + start of diagonal
+    turtle_part1 = make_connected_line([
+        ('v', 200, 500, 400),
+        ('d', 200, 400, 215, 385),
+    ])
+    # Part 2: continues after ~2.8 pixel gap (within 3.0 merge threshold)
+    # Gap: (215,385) to (217,383) = sqrt(4+4) = 2.83
+    turtle_part2 = make_connected_line([
+        ('d', 217, 383, 230, 370),
+        ('h', 370, 230, 600),
+    ])
+
+    # Partner line: well separated
+    partner = make_connected_line([
+        ('v', 200, 250, 150),
+        ('d', 200, 150, 230, 120),
+        ('h', 120, 230, 600),
+    ])
+
+    points = turtle_part1 + turtle_part2 + partner
+    print(f"Created {len(points)} points (fragmented turtle + partner)")
+
+    from vertualmarker.geometry import find_connected_components, merge_nearby_components
+    raw_components = find_connected_components(points)
+    print(f"Raw components: {len(raw_components)}")
+    for i, comp in enumerate(sorted(raw_components, key=len, reverse=True)[:5]):
+        bottom = max(comp, key=lambda p: p[1])
+        print(f"  Raw #{i+1}: {len(comp)} pts, bottom=({bottom[0]},{bottom[1]})")
+
+    merged = merge_nearby_components(raw_components, max_gap=3.0, min_component_size=10)
+    print(f"Merged components: {len(merged)}")
+    for i, comp in enumerate(sorted(merged, key=len, reverse=True)[:5]):
+        bottom = max(comp, key=lambda p: p[1])
+        print(f"  Merged #{i+1}: {len(comp)} pts, bottom=({bottom[0]},{bottom[1]})")
+
+    # Verify merge happened: turtle parts should be merged into one
+    merged_sizes = sorted([len(c) for c in merged], reverse=True)
+    turtle_expected = len(turtle_part1) + len(turtle_part2)
+    partner_expected = len(partner)
+    print(f"Expected turtle size ~{turtle_expected}, partner ~{partner_expected}")
+    print(f"Actual merged sizes: {merged_sizes[:3]}")
+
+    # Run strategy 2
+    config = Strategy2Config(
+        FH=30.0, UH=30.0, SX=0.0, SY=0.0, PBL=150,
+        sample_step=1.0, vertical_angle_tolerance=10.0, horizontal_angle_tolerance=10.0,
+    )
+
+    try:
+        result = run_strategy2_on_points(points, config)
+        print(f"\nStrategy 2 SUCCESS:")
+        print(f"  TLSP: ({result.tlsp[0]}, {result.tlsp[1]})")
+        print(f"  Turtle line path length: {len(result.turtle_line_path)}")
+        print(f"  Front head: {len(result.front_head_run)} pts")
+        print(f"  Upper head: {len(result.upper_head_run)} pts")
+        print(f"  Mv: ({result.mv[0]}, {result.mv[1]})")
+        
+        diag = result.diagnostics
+        print(f"  Components: raw={diag.get('num_components_raw')}, merged={diag.get('num_components')}")
+    except Strategy2Error as e:
+        print(f"\nStrategy 2 FAILED: {e}")
+        return False
+
+    print("\nTEST 7 PASSED")
+    return True
+
+
 if __name__ == "__main__":
     results = []
     results.append(("BFS path finding", test_bfs_path_finding()))
@@ -368,6 +442,7 @@ if __name__ == "__main__":
     results.append(("Diagonal connectivity", test_diagonal_connectivity()))
     results.append(("Full pipeline", test_full_pipeline_with_file()))
     results.append(("Fragmented with noise", test_fragmented_with_noise()))
+    results.append(("Fragmented turtle line", test_fragmented_turtle_line()))
 
     print("\n" + "=" * 60)
     print("SUMMARY")

@@ -333,6 +333,143 @@ def _find_first_near_direction_run(
     return None
 
 
+def merge_nearby_components(
+    components: List[List[Point]],
+    max_gap: float = 3.0,
+    min_component_size: int = 10,
+) -> List[List[Point]]:
+    """거리가 가까운 component들을 합쳐서 분리된 선을 복원한다.
+
+    max_gap: 합칠 최대 거리 (픽셀). 이 거리 이내의 component 쌍을 합친다.
+    min_component_size: 합침 대상의 최소 크기 (작은 노이즈 제외).
+    합쳐진 component 사이에 bridge 점들을 추가해 8-연결성을 유지한다.
+    """
+    if not components:
+        return components
+
+    # 크기 기준으로 분리
+    large: List[Tuple[int, List[Point]]] = []
+    small: List[List[Point]] = []
+    for idx, comp in enumerate(components):
+        if len(comp) >= min_component_size:
+            large.append((idx, comp))
+        else:
+            small.append(comp)
+
+    if len(large) <= 1:
+        # 합칠 대상이 없음
+        return components
+
+    # Union-Find
+    parent: Dict[int, int] = {idx: idx for idx, _ in large}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    # 각 large component의 bounding box를 계산해 빠른 사전 필터링
+    bboxes: Dict[int, Tuple[int, int, int, int]] = {}
+    for idx, comp in large:
+        xs = [p[0] for p in comp]
+        ys = [p[1] for p in comp]
+        bboxes[idx] = (min(xs), min(ys), max(xs), max(ys))
+
+    # 가까운 component 쌍 찾기
+    merge_bridges: List[Tuple[int, int, Point, Point]] = []
+    for i in range(len(large)):
+        for j in range(i + 1, len(large)):
+            idx_a, comp_a = large[i]
+            idx_b, comp_b = large[j]
+
+            if find(idx_a) == find(idx_b):
+                continue
+
+            # Bounding box 필터: box 사이 거리가 max_gap 초과이면 건너뜀
+            ba = bboxes[idx_a]
+            bb = bboxes[idx_b]
+            box_gap_x = max(0, max(ba[0], bb[0]) - min(ba[2], bb[2]))
+            box_gap_y = max(0, max(ba[1], bb[1]) - min(ba[3], bb[3]))
+            if math.hypot(box_gap_x, box_gap_y) > max_gap + 1:
+                continue
+
+            # 실제 최소 거리 계산 (최적화: 조기 종료)
+            min_dist = float("inf")
+            closest_a: Optional[Point] = None
+            closest_b: Optional[Point] = None
+            for p1 in comp_a:
+                for p2 in comp_b:
+                    d = distance(p1, p2)
+                    if d < min_dist:
+                        min_dist = d
+                        closest_a = p1
+                        closest_b = p2
+                    if d <= 1.5:  # 이미 8-인접
+                        break
+                if min_dist <= 1.5:
+                    break
+
+            if min_dist <= max_gap and closest_a is not None and closest_b is not None:
+                union(idx_a, idx_b)
+                merge_bridges.append((idx_a, idx_b, closest_a, closest_b))
+
+    # 그룹별로 합치기
+    groups: Dict[int, List[Point]] = {}
+    for idx, comp in large:
+        root = find(idx)
+        if root not in groups:
+            groups[root] = []
+        groups[root].extend(comp)
+
+    # Bridge 점 추가 (8-연결성 유지)
+    for idx_a, idx_b, p_a, p_b in merge_bridges:
+        root = find(idx_a)
+        bridge = _bresenham_line(p_a, p_b)
+        group_set = set(groups[root])
+        for bp in bridge:
+            if bp not in group_set:
+                groups[root].append(bp)
+                group_set.add(bp)
+
+    # 결과 조합
+    result: List[List[Point]] = list(groups.values())
+    result.extend(small)
+    return result
+
+
+def _bresenham_line(p1: Point, p2: Point) -> List[Point]:
+    """Bresenham 알고리즘으로 두 점 사이의 직선 픽셀을 생성."""
+    x1, y1 = p1
+    x2, y2 = p2
+    points: List[Point] = []
+
+    dx = abs(x2 - x1)
+    dy = abs(y2 - y1)
+    sx = 1 if x1 < x2 else -1
+    sy = 1 if y1 < y2 else -1
+    err = dx - dy
+
+    while True:
+        points.append((x1, y1))
+        if x1 == x2 and y1 == y2:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x1 += sx
+        if e2 < dx:
+            err += dx
+            y1 += sy
+
+    return points
+
+
 def compute_line_intersection(
     vertical_points: List[Point], horizontal_points: List[Point]
 ) -> Point:

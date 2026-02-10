@@ -20,6 +20,7 @@ from .geometry import (
     find_first_vertical_run,
     find_path_bfs,
     get_neighbors,
+    merge_nearby_components,
     sample_path_at_intervals,
 )
 
@@ -361,7 +362,17 @@ def run_strategy2_on_points(
 
     # 1. Connected component 찾기
     components = find_connected_components(points)
+    all_diagnostics["num_components_raw"] = len(components)
+
+    # 1.5. 가까운 component 합치기 (분리된 선 복원)
+    components = merge_nearby_components(components, max_gap=3.0, min_component_size=10)
     all_diagnostics["num_components"] = len(components)
+
+    logger.info(
+        "Connected components: 원본=%d, 합침 후=%d",
+        all_diagnostics["num_components_raw"],
+        all_diagnostics["num_components"],
+    )
 
     # 2. 가장 긴 두 개의 선 선택
     comp1, comp2, pick_diag = pick_two_longest_lines(components)
