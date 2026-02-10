@@ -155,6 +155,40 @@ determine the virtual marker position from the side bending vision edge map
   - Mv'→BSP의 `dx, dy, distance(px)`를 함께 표기해 초기 오차를 즉시 확인 가능하다.
 - **버전 번호**: 현재 최종 배포 버전은 `v10.0.0` 이다.
 
+### ver11 업데이트 반영
+
+- **X축 숫자 겹침 해결**:
+  - x축 major tick을 자동 밀도 제한(`MaxNLocator`)으로 제어한다.
+  - 라벨을 30도 회전 + 우측 정렬해 긴 좌표 범위에서도 겹침을 줄인다.
+- **버전 번호**: 현재 최종 배포 버전은 `v11.0.0` 이다.
+
+### Developer Handoff (for next AI model)
+
+다음 모델이 바로 이어서 개발할 수 있도록 현재 동작과 핵심 해석을 정리한다.
+
+- **Core flow (`strategy2.py`)**
+  - 입력 TXT 점군을 8-이웃 connected component로 복원.
+  - 가장 긴 선 2개를 기준으로 거북이 선 선택.
+  - TLSP, FH, UH를 순차 검출하고 Mv / Mv' / BSP 계산.
+  - BSP에서 반대 방향 샘플링으로 `x,y,index` 출력 생성.
+- **Diagnostics policy**
+  - `Mv'`와 `BSP`는 원래 가깝게 맞추는 것이 정상.
+  - 진단은 **가까울 때가 아니라 멀어질 때**만 WARNING/CRITICAL을 출력.
+  - CRITICAL 진단은 시각화 이미지에도 issue point로 표시.
+- **Visualization policy (`visualization.py`)**
+  - 원본 점군 + longest two components + turtle path를 중첩 시각화.
+  - 마커는 반투명으로 설정해 가림 현상을 줄임.
+  - 5px 간격 보조 그리드(minor) + major grid를 함께 사용.
+  - 이미지 내부에 `Mv`, `Mv'`, `BSP` 좌표와 `dx, dy, dist(px)` 오차 정보를 표시.
+- **GUI policy (`app.py`)**
+  - `QSplitter` 기반 드래그 리사이즈 UI.
+  - Last visualization preview는 최대 100장 유지.
+  - 프리뷰 이미지는 클릭 시 확대 다이얼로그로 확인 가능.
+  - 기본 output 경로는 실행파일 기준 `output/`.
+- **Release/build naming**
+  - EXE 이름/아티팩트 이름은 `virtualmarker_app` 계열로 통일.
+  - 워크플로우: `.github/workflows/windows-build.yml`.
+
 ### 정밀 제어용 파라미터
 
 GUI에서 아래 파라미터들을 조정하여 실제 공정 조건에 맞게 전략 2를 튜닝할 수 있다.

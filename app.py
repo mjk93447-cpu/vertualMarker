@@ -82,7 +82,7 @@ class ClickableImageLabel(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Virtual Marker v10 - Final Release Workbench")
+        self.setWindowTitle("Virtual Marker v11 - Final Release Workbench")
         self.resize(1500, 980)
         self.preview_paths: List[str] = []
 
@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(central)
         self._apply_professional_theme()
 
-        title = QLabel("Virtual Marker v10 - Final Release")
+        title = QLabel("Virtual Marker v11 - Final Release")
         title.setObjectName("TitleLabel")
         subtitle = QLabel(
             "Production-ready workstation for Strategy 2: diagnostics, trajectory export, "

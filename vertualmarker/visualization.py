@@ -2,7 +2,7 @@
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 
 from .geometry import Point, distance
 from .strategy2 import Strategy2Result
@@ -265,12 +265,16 @@ def visualize_result(
     ax.set_ylabel("Y (pixel)")
     ax.set_title("Strategy 2 - Turtle Line, Longest Components, and Bending Trajectory")
     ax.legend(loc="best", fontsize=8, framealpha=0.9)
-    ax.xaxis.set_major_locator(MultipleLocator(25))
+    # Keep X tick labels readable on dense wide coordinate ranges.
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=8, min_n_ticks=4))
     ax.yaxis.set_major_locator(MultipleLocator(25))
     ax.xaxis.set_minor_locator(MultipleLocator(5))
     ax.yaxis.set_minor_locator(MultipleLocator(5))
     ax.grid(which="major", color="#AAB3C2", alpha=0.24, linewidth=0.28)
     ax.grid(which="minor", color="#BFC6D2", alpha=0.18, linewidth=0.18)
+    ax.tick_params(axis="x", labelrotation=30, labelsize=8)
+    for label in ax.get_xticklabels():
+        label.set_horizontalalignment("right")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
