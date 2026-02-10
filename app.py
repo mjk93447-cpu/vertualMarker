@@ -2,7 +2,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QColor, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -20,14 +20,15 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QGroupBox,
     QGridLayout,
+    QProgressBar,
 )
 
 from vertualmarker.strategy2 import (
     Strategy2Config,
     Strategy2Error,
-    run_strategy2_on_file,
+    run_strategy2_on_points,
     save_result_points_txt,
-    parse_txt_points,
+    parse_txt_points_with_report,
 )
 from vertualmarker.visualization import visualize_result
 from vertualmarker.data_generator import (
@@ -40,7 +41,7 @@ from vertualmarker.data_generator import (
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Virtual Marker v7 - Strategy 2 Workbench")
+        self.setWindowTitle("Virtual Marker v8 - Strategy 2 Workbench")
         self.resize(1200, 820)
 
         central = QWidget()
@@ -49,7 +50,7 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         self._apply_professional_theme()
 
-        title = QLabel("Virtual Marker v7 - Strategy 2 (Turtle Head)")
+        title = QLabel("Virtual Marker v8 - Strategy 2 (Turtle Head)")
         title.setObjectName("TitleLabel")
         subtitle = QLabel(
             "Analyze edge-map TXT points, detect turtle-line geometry, and export "
@@ -58,6 +59,8 @@ class MainWindow(QMainWindow):
         subtitle.setWordWrap(True)
         main_layout.addWidget(title)
         main_layout.addWidget(subtitle)
+        self.label_runtime_status = QLabel("Ready.")
+        main_layout.addWidget(self.label_runtime_status)
 
         # Input files group
         file_group = QGroupBox("Input TXT Files (max 500)")
@@ -161,6 +164,20 @@ class MainWindow(QMainWindow):
         param_layout.addWidget(step_label, 2, 2)
         param_layout.addWidget(self.spin_step, 2, 3)
 
+        # Gap-heal parameter
+        heal_label = QLabel("Max Heal Gap (pixel)")
+        heal_label.setToolTip(
+            "Maximum endpoint gap to auto-bridge when line breaks are detected."
+        )
+        self.spin_heal_gap = QSpinBox()
+        self.spin_heal_gap.setRange(1, 5)
+        self.spin_heal_gap.setValue(2)
+        self.spin_heal_gap.setToolTip(
+            "Increase this when small disconnections appear in edge extraction."
+        )
+        param_layout.addWidget(heal_label, 3, 0)
+        param_layout.addWidget(self.spin_heal_gap, 3, 1)
+
         main_layout.addWidget(param_group)
 
         # Algorithm guide
@@ -183,7 +200,14 @@ class MainWindow(QMainWindow):
             "  x,y,1\n"
             "  x,y,2\n"
             "  ...\n"
-            "Use the index column as a stable key for frame-to-frame motion tracking."
+            "Use the index column as a stable key for frame-to-frame motion tracking.\n\n"
+            "v8 reliability notes:\n"
+            "- Detects branch ambiguity around FH/UH candidates.\n"
+            "- Applies automatic correction for short line-break gaps.\n"
+            "- Max Heal Gap controls auto-bridge sensitivity for broken edges.\n"
+            "- Displays immediate diagnostics and offset metrics in both log and image."
+            "\n- Reports malformed input lines skipped during parsing."
+            "\n- Supports in-run cancellation for large batch execution."
         )
         guide_layout.addWidget(self.text_guide)
         main_layout.addWidget(guide_group)
@@ -200,9 +224,26 @@ class MainWindow(QMainWindow):
         # Run button
         run_layout = QHBoxLayout()
         run_layout.addStretch(1)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setEnabled(False)
+        run_layout.addWidget(self.btn_cancel)
         self.btn_run = QPushButton("Run Processing")
         run_layout.addWidget(self.btn_run)
         main_layout.addLayout(run_layout)
+        self.progress = QProgressBar()
+        self.progress.setMinimum(0)
+        self.progress.setValue(0)
+        main_layout.addWidget(self.progress)
+
+        # Preview output image for immediate user feedback
+        preview_group = QGroupBox("Last Visualization Preview")
+        preview_layout = QVBoxLayout()
+        preview_group.setLayout(preview_layout)
+        self.label_preview = QLabel("No visualization generated yet.")
+        self.label_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_preview.setMinimumHeight(220)
+        preview_layout.addWidget(self.label_preview)
+        main_layout.addWidget(preview_group)
 
         # Log output
         log_group = QGroupBox("Execution Log")
@@ -219,7 +260,9 @@ class MainWindow(QMainWindow):
         self.btn_clear_files.clicked.connect(self.file_list.clear)
         self.btn_select_output.clicked.connect(self.on_select_output_dir)
         self.btn_run.clicked.connect(self.on_run)
+        self.btn_cancel.clicked.connect(self.on_cancel)
         self.btn_generate_example.clicked.connect(self.on_generate_example)
+        self._cancel_requested = False
 
     def _apply_professional_theme(self) -> None:
         self.setStyleSheet(
@@ -319,6 +362,11 @@ class MainWindow(QMainWindow):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.text_log.setTextCursor(cursor)
 
+    def on_cancel(self) -> None:
+        self._cancel_requested = True
+        self.label_runtime_status.setText("Cancel requested... finishing current file.")
+        self.log("Cancellation requested by user.")
+
     # Run processing
     def on_run(self) -> None:
         count = self.file_list.count()
@@ -337,6 +385,7 @@ class MainWindow(QMainWindow):
             SY=self.spin_sy.value(),
             PBL=self.spin_pbl.value(),
             sample_step=self.spin_step.value(),
+            heal_gap=self.spin_heal_gap.value(),
         )
 
         output_dir = self.edit_output_dir.text().strip()
@@ -353,19 +402,31 @@ class MainWindow(QMainWindow):
 
         self.log(
             f"Run started: files={count}, "
-            f"FH={config.FH}, UH={config.UH}, SX={config.SX}, SY={config.SY}, PBL={config.PBL}, step={config.sample_step}"
+            f"FH={config.FH}, UH={config.UH}, SX={config.SX}, SY={config.SY}, "
+            f"PBL={config.PBL}, step={config.sample_step}, heal_gap={config.heal_gap}"
         )
         if output_dir:
             self.log(f"Output folder: {output_dir}")
         else:
             self.log("Output folder: same directory as each input file")
         self.log("=" * 60)
+        self.label_runtime_status.setText("Running...")
+        self._cancel_requested = False
+        self.btn_run.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.progress.setMaximum(count)
+        self.progress.setValue(0)
 
         num_success = 0
         num_fail = 0
+        first_failure_notified = False
 
         for i in range(count):
+            if self._cancel_requested:
+                self.log("Run canceled by user.")
+                break
             path = self.file_list.item(i).text()
+            item = self.file_list.item(i)
             input_stem = os.path.splitext(os.path.basename(path))[0]
             if output_dir:
                 out_txt = os.path.join(output_dir, input_stem + "_bending_points.txt")
@@ -379,11 +440,13 @@ class MainWindow(QMainWindow):
 
             try:
                 self.log("  - Reading input points...")
-                original_points = parse_txt_points(path)
+                original_points, skipped = parse_txt_points_with_report(path)
                 self.log(f"  - Loaded points: {len(original_points)}")
+                if skipped > 0:
+                    self.log(f"  - Parser diagnostics: skipped malformed lines = {skipped}")
 
                 self.log("  - Running Strategy 2...")
-                result = run_strategy2_on_file(path, config)
+                result = run_strategy2_on_points(original_points, config)
                 if result.longest_two_lines_info:
                     for idx, (lowest, length) in enumerate(
                         result.longest_two_lines_info, start=1
@@ -400,7 +463,17 @@ class MainWindow(QMainWindow):
                 self.log(f"  - Front-head run: {len(result.front_head_run)} points")
                 self.log(f"  - Upper-head run: {len(result.upper_head_run)} points")
                 self.log(f"  - Mv: ({result.mv[0]}, {result.mv[1]})")
+                self.log(f"  - Mv': ({result.mv_shifted[0]}, {result.mv_shifted[1]})")
                 self.log(f"  - BSP: ({result.bsp[0]}, {result.bsp[1]})")
+                self.log(
+                    "  - Initial offset (BSP - Mv'): "
+                    f"dX={result.mv_bsp_dx}, dY={result.mv_bsp_dy}, "
+                    f"distance={result.mv_bsp_distance:.3f}"
+                )
+                if result.warnings:
+                    self.log("  - Diagnostics:")
+                    for warn in result.warnings:
+                        self.log(f"    * {warn}")
 
                 self.log("  - Saving TXT output...")
                 save_result_points_txt(out_txt, result)
@@ -409,29 +482,77 @@ class MainWindow(QMainWindow):
                 self.log("  - Rendering visualization...")
                 visualize_result(original_points, result, out_img)
                 self.log(f"  - Visualization saved: {os.path.basename(out_img)}")
+                pixmap = QPixmap(out_img)
+                if not pixmap.isNull():
+                    self.label_preview.setPixmap(
+                        pixmap.scaledToHeight(
+                            220, Qt.TransformationMode.SmoothTransformation
+                        )
+                    )
+                item.setForeground(QColor("#95F29B"))
 
                 self.log(f"[SUCCESS] {os.path.basename(path)}")
                 self.log(f"  -> {os.path.basename(out_txt)} ({len(result.bending_points)} points)")
                 self.log(f"  -> {os.path.basename(out_img)}")
                 num_success += 1
             except Strategy2Error as e:
+                item.setForeground(QColor("#FF8B8B"))
                 self.log(f"[FAILED] {os.path.basename(path)}")
                 self.log(f"  Error: {e}")
                 import traceback
                 self.log(f"  Details: {traceback.format_exc()}")
+                if not first_failure_notified:
+                    QMessageBox.warning(
+                        self,
+                        "Processing Warning",
+                        f"First failure detected on:\n{os.path.basename(path)}\n\n{e}",
+                    )
+                    first_failure_notified = True
+                self.label_runtime_status.setText(
+                    f"Warning: failure detected on {os.path.basename(path)}"
+                )
                 num_fail += 1
             except Exception as e:  # noqa: BLE001
+                item.setForeground(QColor("#FF8B8B"))
                 self.log(f"[ERROR] {os.path.basename(path)}")
                 self.log(f"  Exception: {type(e).__name__}: {e}")
                 import traceback
                 self.log(f"  Details:\n{traceback.format_exc()}")
+                if not first_failure_notified:
+                    QMessageBox.warning(
+                        self,
+                        "Processing Error",
+                        f"First exception detected on:\n{os.path.basename(path)}\n\n{type(e).__name__}: {e}",
+                    )
+                    first_failure_notified = True
+                self.label_runtime_status.setText(
+                    f"Error: exception detected on {os.path.basename(path)}"
+                )
                 num_fail += 1
 
-        QMessageBox.information(
-            self,
-            "Completed",
-            f"Processing complete.\nSuccess: {num_success}\nFailed: {num_fail}",
-        )
+            self.progress.setValue(i + 1)
+            QApplication.processEvents()
+
+        if self._cancel_requested:
+            QMessageBox.information(
+                self,
+                "Canceled",
+                f"Processing canceled by user.\nSuccess: {num_success}\nFailed: {num_fail}",
+            )
+            self.label_runtime_status.setText(
+                f"Canceled. Success={num_success}, Failed={num_fail}"
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Completed",
+                f"Processing complete.\nSuccess: {num_success}\nFailed: {num_fail}",
+            )
+            self.label_runtime_status.setText(
+                f"Completed. Success={num_success}, Failed={num_fail}"
+            )
+        self.btn_run.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
         self.log("=== Processing complete ===")
 
     def on_generate_example(self) -> None:

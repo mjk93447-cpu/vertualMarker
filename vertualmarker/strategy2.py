@@ -13,6 +13,7 @@ from typing import List, Tuple
 from .geometry import (
     Point,
     compute_line_intersection,
+    detect_straight_runs,
     distance,
     find_connected_components,
     find_endpoints,
@@ -31,6 +32,7 @@ class Strategy2Config:
     SY: float  # Shift in y for virtual marker
     PBL: int  # Panel bending length (출력 포인트 개수)
     sample_step: float = 1.0  # 샘플링 간격 (픽셀)
+    heal_gap: int = 2  # line-break auto-heal max gap (pixels)
 
 
 @dataclass
@@ -46,20 +48,26 @@ class Strategy2Result:
     turtle_lowest_point: Point  # 거북이 선에서 y가 가장 큰 점
     turtle_line_length: int  # 거북이 선 경로 길이(점 개수 기준)
     longest_two_lines_info: List[Tuple[Point, int]]  # [(최하단점, 길이), ...]
+    support_line_paths: List[List[Point]]  # 거북이선 외 긴 선(시각화용)
+    warnings: List[str]  # 자동보정/예외 대응 피드백
+    mv_bsp_dx: int  # BSP - Mv' 의 x 오차
+    mv_bsp_dy: int  # BSP - Mv' 의 y 오차
+    mv_bsp_distance: float  # BSP와 Mv' 사이 거리
 
 
 class Strategy2Error(Exception):
     """Domain-specific error for Strategy 2 processing."""
 
 
-def parse_txt_points(path: str) -> List[Point]:
-    """TXT 파일에서 점 좌표들을 읽어온다.
+def parse_txt_points_with_report(path: str) -> Tuple[List[Point], int]:
+    """TXT 파일에서 점 좌표를 읽고 skip 라인 수를 함께 반환한다.
 
     - 한 줄에 한 점: x,y 또는 x y
     - # 로 시작하는 줄은 주석으로 무시
     - 빈 줄은 무시
     """
     points: List[Point] = []
+    skipped = 0
 
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
@@ -78,6 +86,7 @@ def parse_txt_points(path: str) -> List[Point]:
                 parts = line.split()
 
             if len(parts) < 2:
+                skipped += 1
                 continue
 
             try:
@@ -85,11 +94,21 @@ def parse_txt_points(path: str) -> List[Point]:
                 y = int(round(float(parts[1])))
                 points.append((x, y))
             except ValueError:
+                skipped += 1
                 continue
 
     if not points:
-        raise Strategy2Error("No valid coordinates were found in the input TXT file.")
+        raise Strategy2Error(
+            f"No valid coordinates were found in the input TXT file. "
+            f"Skipped malformed lines: {skipped}."
+        )
 
+    return points, skipped
+
+
+def parse_txt_points(path: str) -> List[Point]:
+    """Backward-compatible parser that returns points only."""
+    points, _skipped = parse_txt_points_with_report(path)
     return points
 
 
@@ -137,6 +156,53 @@ def summarize_longest_two_lines(components: List[List[Point]]) -> List[Tuple[Poi
         return []
     ranked = sorted(components, key=len, reverse=True)[:2]
     return [(max(comp, key=lambda p: p[1]), len(comp)) for comp in ranked]
+
+
+def _interpolate_points(p1: Point, p2: Point) -> List[Point]:
+    """p1-p2 사이를 직선 보간한 정수 격자 점들을 반환한다."""
+    steps = max(abs(p2[0] - p1[0]), abs(p2[1] - p1[1]))
+    if steps <= 1:
+        return []
+    points: List[Point] = []
+    for i in range(1, steps):
+        t = i / steps
+        points.append(
+            (
+                int(round(p1[0] + (p2[0] - p1[0]) * t)),
+                int(round(p1[1] + (p2[1] - p1[1]) * t)),
+            )
+        )
+    return points
+
+
+def heal_broken_lines(points: List[Point], max_gap: int = 2) -> Tuple[List[Point], int]:
+    """작은 선 끊어짐(끝점 간 근접)을 자동 보정해 연결점을 추가한다."""
+    components = find_connected_components(points)
+    if len(components) <= 1:
+        return points, 0
+
+    added: set[Point] = set()
+    endpoint_map: List[Tuple[int, Point]] = []
+    for idx, comp in enumerate(components):
+        for ep in find_endpoints(comp):
+            endpoint_map.append((idx, ep))
+
+    # 서로 다른 component의 끝점이 max_gap 이내면 연결선 삽입
+    for i in range(len(endpoint_map)):
+        ci, p1 = endpoint_map[i]
+        for j in range(i + 1, len(endpoint_map)):
+            cj, p2 = endpoint_map[j]
+            if ci == cj:
+                continue
+            if max(abs(p1[0] - p2[0]), abs(p1[1] - p2[1])) <= max_gap:
+                for bridge in _interpolate_points(p1, p2):
+                    added.add(bridge)
+
+    if not added:
+        return points, 0
+
+    merged = list(set(points).union(added))
+    return merged, len(added)
 
 
 def find_turtle_line(comp1: List[Point], comp2: List[Point]) -> List[Point]:
@@ -315,28 +381,105 @@ def _build_ordered_path(component: List[Point], start: Point) -> List[Point]:
     return path
 
 
+def _build_component_plot_path(component: List[Point]) -> List[Point]:
+    """component를 시각화용 연속 경로로 정렬한다."""
+    if not component:
+        return []
+    endpoints = find_endpoints(component)
+    start = endpoints[0] if endpoints else component[0]
+    path = _build_ordered_path(component, start)
+    if len(path) < 2 and len(component) >= 2:
+        point_set = set(component)
+        start = component[0]
+        end = max(component[1:], key=lambda p: distance(start, p))
+        path = _shortest_path_in_component(list(point_set), start, end)
+    return path if path else component[:]
+
+
 def find_front_head_and_upper_head(
     path: List[Point], fh: int, uh: int
-) -> Tuple[List[Point], List[Point]]:
-    """거북이 선 경로에서 앞머리끝과 윗머리끝 직선 구간을 찾는다."""
-    # 앞머리끝: 세로 직선 구간 (점 개수 >= FH)
+) -> Tuple[List[Point], List[Point], List[str]]:
+    """거북이 선 경로에서 앞머리/윗머리 구간을 탐색하고 자동 보정한다."""
+    warnings: List[str] = []
+
+    # 1) strict 탐색
     front_head = find_first_vertical_run(path, int(fh))
+    used_fh = int(fh)
+
+    # 2) 자동 보정: 임계값 완화
     if not front_head:
-        raise Strategy2Error(
-            f"Unable to find a vertical segment satisfying FH={fh}."
+        for ratio in (0.85, 0.7):
+            relaxed = max(3, int(round(fh * ratio)))
+            front_head = find_first_vertical_run(path, relaxed)
+            if front_head:
+                used_fh = relaxed
+                warnings.append(
+                    f"Auto-correction applied: FH threshold relaxed from {int(fh)} to {relaxed}."
+                )
+                break
+    if not front_head:
+        # 마지막 fallback: 가장 긴 세로 구간 선택
+        vertical_runs = [pts for d, pts in detect_straight_runs(path) if d == "vertical"]
+        if vertical_runs:
+            front_head = max(vertical_runs, key=len)
+            used_fh = len(front_head)
+            warnings.append(
+                "Auto-correction applied: strict FH matching failed; selected the longest vertical run."
+            )
+        else:
+            raise Strategy2Error(f"Unable to find a vertical segment satisfying FH={fh}.")
+
+    # 분기/애매한 구간 진단
+    runs = detect_straight_runs(path)
+    candidate_v = [pts for d, pts in runs if d == "vertical" and len(pts) >= max(3, int(used_fh * 0.8))]
+    if len(candidate_v) > 1:
+        warnings.append(
+            f"Ambiguous branch detected: {len(candidate_v)} vertical candidates found near FH."
         )
 
-    # 앞머리끝 이후 경로에서 윗머리끝 찾기
     front_head_end_idx = path.index(front_head[-1])
     remaining_path = path[front_head_end_idx + 1 :]
+    if len(remaining_path) < 2:
+        raise Strategy2Error("Path after front-head segment is too short.")
 
     upper_head = find_first_horizontal_run(remaining_path, int(uh))
+    used_uh = int(uh)
     if not upper_head:
-        raise Strategy2Error(
-            f"Unable to find a horizontal segment satisfying UH={uh}."
+        for ratio in (0.85, 0.7):
+            relaxed = max(3, int(round(uh * ratio)))
+            upper_head = find_first_horizontal_run(remaining_path, relaxed)
+            if upper_head:
+                used_uh = relaxed
+                warnings.append(
+                    f"Auto-correction applied: UH threshold relaxed from {int(uh)} to {relaxed}."
+                )
+                break
+    if not upper_head:
+        horizontal_runs = [
+            pts for d, pts in detect_straight_runs(remaining_path) if d == "horizontal"
+        ]
+        if horizontal_runs:
+            upper_head = max(horizontal_runs, key=len)
+            used_uh = len(upper_head)
+            warnings.append(
+                "Auto-correction applied: strict UH matching failed; selected the longest horizontal run."
+            )
+        else:
+            raise Strategy2Error(
+                f"Unable to find a horizontal segment satisfying UH={uh}."
+            )
+
+    candidate_h = [
+        pts
+        for d, pts in detect_straight_runs(remaining_path)
+        if d == "horizontal" and len(pts) >= max(3, int(used_uh * 0.8))
+    ]
+    if len(candidate_h) > 1:
+        warnings.append(
+            f"Ambiguous branch detected: {len(candidate_h)} horizontal candidates found near UH."
         )
 
-    return front_head, upper_head
+    return front_head, upper_head, warnings
 
 
 def compute_mv(front_head: List[Point], upper_head: List[Point]) -> Point:
@@ -359,8 +502,15 @@ def run_strategy2_on_points(
     points: List[Point], config: Strategy2Config
 ) -> Strategy2Result:
     """점 집합에 대해 전략 2를 실행."""
-    # 1. Connected component 찾기
-    components = find_connected_components(points)
+    warnings: List[str] = []
+
+    # 1. Connected component 찾기 + 선 끊어짐 자동 보정
+    healed_points, added_bridge_points = heal_broken_lines(points, max_gap=max(1, int(config.heal_gap)))
+    if added_bridge_points > 0:
+        warnings.append(
+            f"Auto-correction applied: healed line breaks by inserting {added_bridge_points} bridge points."
+        )
+    components = find_connected_components(healed_points)
 
     longest_two_info = summarize_longest_two_lines(components)
 
@@ -375,9 +525,10 @@ def run_strategy2_on_points(
     tlsp, turtle_path = find_tlsp(turtle_component)
 
     # 5 & 6. 앞머리끝과 윗머리끝 찾기
-    front_head, upper_head = find_front_head_and_upper_head(
+    front_head, upper_head, run_warnings = find_front_head_and_upper_head(
         turtle_path, config.FH, config.UH
     )
+    warnings.extend(run_warnings)
 
     # 7. 가상 마커 Mv 계산
     mv = compute_mv(front_head, upper_head)
@@ -385,6 +536,9 @@ def run_strategy2_on_points(
     # 8. Mv 평행이동 및 BSP 찾기
     mv_shifted = (int(round(mv[0] + config.SX)), int(round(mv[1] + config.SY)))
     bsp = find_bsp(turtle_path, mv_shifted)
+    mv_bsp_dx = bsp[0] - mv_shifted[0]
+    mv_bsp_dy = bsp[1] - mv_shifted[1]
+    mv_bsp_dist = distance(mv_shifted, bsp)
 
     # 9. BSP에서 TLSP 방향의 반대 방향으로 경로 탐색
     bsp_idx = turtle_path.index(bsp)
@@ -411,6 +565,17 @@ def run_strategy2_on_points(
         sampling_path, 0, config.PBL, config.sample_step
     )
 
+    # 거북이선 외 상위 긴 선들(최대 3개)을 시각화용 경로로 준비
+    support_line_paths: List[List[Point]] = []
+    turtle_set = set(turtle_component)
+    ranked = sorted(components, key=len, reverse=True)
+    for comp in ranked:
+        if set(comp) == turtle_set:
+            continue
+        support_line_paths.append(_build_component_plot_path(comp))
+        if len(support_line_paths) >= 3:
+            break
+
     return Strategy2Result(
         tlsp=tlsp,
         turtle_line_path=turtle_path,
@@ -423,6 +588,11 @@ def run_strategy2_on_points(
         turtle_lowest_point=turtle_lowest_point,
         turtle_line_length=len(turtle_path),
         longest_two_lines_info=longest_two_info,
+        support_line_paths=support_line_paths,
+        warnings=warnings,
+        mv_bsp_dx=mv_bsp_dx,
+        mv_bsp_dy=mv_bsp_dy,
+        mv_bsp_distance=mv_bsp_dist,
     )
 
 
