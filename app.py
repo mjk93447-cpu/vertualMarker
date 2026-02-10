@@ -249,6 +249,16 @@ class MainWindow(QMainWindow):
 
                 self.log(f"  - 전략 2 알고리즘 실행 중...")
                 result = run_strategy2_on_file(path, config)
+                if result.longest_two_lines_info:
+                    for idx, (lowest, length) in enumerate(result.longest_two_lines_info, start=1):
+                        self.log(
+                            f"  - longest line #{idx}: 최하단점=({lowest[0]}, {lowest[1]}), 길이={length}"
+                        )
+                self.log(
+                    "  - 거북이선 특정완료: "
+                    f"최하단점=({result.turtle_lowest_point[0]}, {result.turtle_lowest_point[1]}), "
+                    f"전체 길이={result.turtle_line_length}"
+                )
                 self.log(f"  - 거북이 선 경로 길이: {len(result.turtle_line_path)}")
                 self.log(f"  - 앞머리 구간: {len(result.front_head_run)} 점")
                 self.log(f"  - 윗머리 구간: {len(result.upper_head_run)} 점")

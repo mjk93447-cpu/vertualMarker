@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -17,7 +18,6 @@ from .geometry import (
     find_endpoints,
     find_first_horizontal_run,
     find_first_vertical_run,
-    find_longest_path_with_branching,
     get_neighbors,
     sample_path_at_intervals,
 )
@@ -43,6 +43,9 @@ class Strategy2Result:
     mv_shifted: Point
     bsp: Point
     bending_points: List[Point]  # 순서번호 1..PBL에 해당하는 점들
+    turtle_lowest_point: Point  # 거북이 선에서 y가 가장 큰 점
+    turtle_line_length: int  # 거북이 선 경로 길이(점 개수 기준)
+    longest_two_lines_info: List[Tuple[Point, int]]  # [(최하단점, 길이), ...]
 
 
 class Strategy2Error(Exception):
@@ -117,7 +120,7 @@ def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], 
     if min_dist < 10:  # 10픽셀 이내면 합침
         merged = comp1 + comp2
         # 나머지 component 중 가장 긴 것 찾기
-        remaining = [components[i] for i, (_, idx) in enumerate(lengths) if idx not in [idx1, idx2]]
+        remaining = [components[idx] for _, idx in lengths if idx not in [idx1, idx2]]
         if remaining:
             comp2 = max(remaining, key=len)
         else:
@@ -128,6 +131,14 @@ def pick_two_longest_lines(components: List[List[Point]]) -> Tuple[List[Point], 
     return comp1, comp2
 
 
+def summarize_longest_two_lines(components: List[List[Point]]) -> List[Tuple[Point, int]]:
+    """가장 긴 2개 선의 (최하단 점, 길이) 정보를 반환한다."""
+    if not components:
+        return []
+    ranked = sorted(components, key=len, reverse=True)[:2]
+    return [(max(comp, key=lambda p: p[1]), len(comp)) for comp in ranked]
+
+
 def find_turtle_line(comp1: List[Point], comp2: List[Point]) -> List[Point]:
     """두 component 중 거북이 선을 찾는다.
 
@@ -136,6 +147,66 @@ def find_turtle_line(comp1: List[Point], comp2: List[Point]) -> List[Point]:
     all_points = [(p, 1) for p in comp1] + [(p, 2) for p in comp2]
     lowest_point, which = max(all_points, key=lambda t: t[0][1])
     return comp1 if which == 1 else comp2
+
+
+def _shortest_path_in_component(
+    component: List[Point], start: Point, end: Point
+) -> List[Point]:
+    """component 내부에서 start->end 최단 경로(BFS)를 반환."""
+    if start == end:
+        return [start]
+    point_set = set(component)
+    if start not in point_set or end not in point_set:
+        return []
+
+    q = deque([start])
+    parent: dict[Point, Point | None] = {start: None}
+    while q:
+        cur = q.popleft()
+        if cur == end:
+            break
+        for nxt in get_neighbors(cur, point_set):
+            if nxt in parent:
+                continue
+            parent[nxt] = cur
+            q.append(nxt)
+
+    if end not in parent:
+        return []
+
+    path: List[Point] = []
+    cur: Point | None = end
+    while cur is not None:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+    return path
+
+
+def _farthest_point_by_steps(component: List[Point], start: Point) -> Point:
+    """BFS hop 기준으로 start에서 가장 먼 점을 찾는다."""
+    point_set = set(component)
+    if start not in point_set:
+        return start
+
+    q = deque([start])
+    dist: dict[Point, int] = {start: 0}
+    farthest = start
+    while q:
+        cur = q.popleft()
+        if dist[cur] > dist[farthest]:
+            farthest = cur
+        elif dist[cur] == dist[farthest]:
+            # 같은 거리면 더 아래쪽(y 큰 점)을 우선
+            if cur[1] > farthest[1]:
+                farthest = cur
+        for nxt in get_neighbors(cur, point_set):
+            if nxt in dist:
+                continue
+            dist[nxt] = dist[cur] + 1
+            q.append(nxt)
+
+    return farthest
 
 
 def find_tlsp(turtle_component: List[Point]) -> Tuple[Point, List[Point]]:
@@ -164,22 +235,23 @@ def find_tlsp(turtle_component: List[Point]) -> Tuple[Point, List[Point]]:
         # 순환 구조: 가장 아래 점 선택
         tlsp = max_y_point
     
-    # 다른 끝점 찾기
-    other_endpoints = [ep for ep in endpoints if ep != tlsp] if endpoints else []
+    # 다른 끝점 중 TLSP에서 hop 기준 가장 먼 점을 선택
+    other_endpoints = [ep for ep in endpoints if ep != tlsp]
     if other_endpoints:
-        end_point = other_endpoints[0]
+        # BFS 거리 기반으로 실제 연결 경로가 긴 끝점을 선택
+        best_path: List[Point] = []
+        for ep in other_endpoints:
+            candidate = _shortest_path_in_component(turtle_component, tlsp, ep)
+            if len(candidate) > len(best_path):
+                best_path = candidate
+        path = best_path
     else:
-        # 끝점이 없으면 가장 먼 점 찾기
-        end_point = max(
-            turtle_component,
-            key=lambda p: distance(tlsp, p) if p != tlsp else -1,
-        )
-    
-    # TLSP에서 end_point까지의 경로 찾기
-    try:
-        path = find_longest_path_with_branching(turtle_component, tlsp, end_point)
-    except Exception:
-        # 실패 시 간단한 경로 사용
+        # 끝점이 명확하지 않으면 TLSP에서 가장 먼 점까지 경로 사용
+        end_point = _farthest_point_by_steps(turtle_component, tlsp)
+        path = _shortest_path_in_component(turtle_component, tlsp, end_point)
+
+    # 경로 복원 실패 시 연결 그래프 순회 기반 fallback
+    if len(path) < 2:
         path = _build_ordered_path(turtle_component, tlsp)
 
     if len(path) < 2:
@@ -286,11 +358,14 @@ def run_strategy2_on_points(
     # 1. Connected component 찾기
     components = find_connected_components(points)
 
+    longest_two_info = summarize_longest_two_lines(components)
+
     # 2. 가장 긴 두 개의 선 선택
     comp1, comp2 = pick_two_longest_lines(components)
 
     # 3. 거북이 선 찾기
     turtle_component = find_turtle_line(comp1, comp2)
+    turtle_lowest_point = max(turtle_component, key=lambda p: p[1])
 
     # 4. TLSP 찾기 및 경로 정렬
     tlsp, turtle_path = find_tlsp(turtle_component)
@@ -311,14 +386,21 @@ def run_strategy2_on_points(
     bsp_idx = turtle_path.index(bsp)
     tlsp_idx = turtle_path.index(tlsp)
 
-    # TLSP 방향의 반대 = BSP에서 멀어지는 방향
-    # BSP가 TLSP보다 앞에 있으면 뒤로, 뒤에 있으면 앞으로
+    # TLSP로 가는 방향의 반대 방향으로 진행
     if bsp_idx < tlsp_idx:
-        # BSP -> ... -> TLSP 방향이므로, 반대는 BSP에서 앞으로
+        # TLSP가 오른쪽(인덱스 증가 방향)이므로 반대는 왼쪽으로 이동
+        sampling_path = list(reversed(turtle_path[: bsp_idx + 1]))
+    elif bsp_idx > tlsp_idx:
+        # TLSP가 왼쪽(인덱스 감소 방향)이므로 반대는 오른쪽으로 이동
         sampling_path = turtle_path[bsp_idx:]
     else:
-        # TLSP -> ... -> BSP 방향이므로, 반대는 BSP에서 뒤로
-        sampling_path = turtle_path[bsp_idx:]
+        # BSP==TLSP면 더 긴 쪽으로 진행
+        left_len = bsp_idx + 1
+        right_len = len(turtle_path) - bsp_idx
+        if right_len >= left_len:
+            sampling_path = turtle_path[bsp_idx:]
+        else:
+            sampling_path = list(reversed(turtle_path[: bsp_idx + 1]))
 
     # PBL개 점 샘플링 (경로의 모든 점 순회 후 1픽셀 간격)
     bending_points = sample_path_at_intervals(
@@ -334,6 +416,9 @@ def run_strategy2_on_points(
         mv_shifted=mv_shifted,
         bsp=bsp,
         bending_points=bending_points,
+        turtle_lowest_point=turtle_lowest_point,
+        turtle_line_length=len(turtle_path),
+        longest_two_lines_info=longest_two_info,
     )
 
 
