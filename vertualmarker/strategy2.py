@@ -430,23 +430,30 @@ def run_strategy2_on_points(
     )
 
     diagnostics: List[DiagnosticItem] = []
-    # Critical: shifted marker and BSP are almost identical, usually means zero margin
     bsp_mv_dist = distance(bsp, mv_shifted)
-    if bsp_mv_dist < 2.0:
+    warn_distance = max(12.0, config.sample_step * 15.0)
+    critical_distance = max(20.0, config.sample_step * 30.0)
+    # Important rule: Mv' and BSP proximity is desirable.
+    # Emit diagnostics only when the gap becomes too large.
+    if bsp_mv_dist >= critical_distance:
         diagnostics.append(
             DiagnosticItem(
                 severity="critical",
                 message=(
-                    "Mv' and BSP are extremely close. Verify SX/SY and head runs to avoid unstable motion anchoring."
+                    f"Mv' to BSP distance is too large ({bsp_mv_dist:.2f}px). "
+                    "This indicates initial alignment drift from intended behavior."
                 ),
                 point=bsp,
             )
         )
-    elif bsp_mv_dist < 5.0:
+    elif bsp_mv_dist >= warn_distance:
         diagnostics.append(
             DiagnosticItem(
                 severity="warning",
-                message="Mv' and BSP are very close. Small parameter changes may shift the starting point.",
+                message=(
+                    f"Mv' to BSP distance is above the preferred range ({bsp_mv_dist:.2f}px). "
+                    "Check SX/SY and segment thresholds."
+                ),
                 point=bsp,
             )
         )

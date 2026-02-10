@@ -138,6 +138,23 @@ determine the virtual marker position from the side bending vision edge map
   - 빌드/아티팩트 이름을 `virtualmarker_app`으로 통일했다.
 - **버전 번호**: 최종 출시 버전은 `v9.0.0` 이다.
 
+### ver10 업데이트 방향 반영
+
+- **Preview 가시성/확대 개선**:
+  - Last visualization preview에서 타일 렌더링 구조를 수정해 이미지가 안정적으로 보이도록 개선했다.
+  - 각 프리뷰 이미지는 클릭 시 확대 다이얼로그로 확인할 수 있다.
+- **Mv' / BSP 진단 정책 보정**:
+  - Mv'와 BSP가 가까운 경우는 정상 동작으로 간주하며 경고/치명 메시지를 출력하지 않는다.
+  - 두 점 간 거리가 의도 범위를 벗어나 멀어질 때만 WARNING/CRITICAL 진단을 출력한다.
+- **시각화 정밀도 강화**:
+  - bending point 크기를 기존 대비 1/10 수준으로 축소해 세밀 관찰성을 높였다.
+  - 주요 선/마커를 더 얇고 반투명하게 조정하여 중첩 영역 가림 현상을 줄였다.
+  - 5픽셀 간격의 얇은 회색 그리드를 추가해 거리 파악성을 높였다.
+- **핵심 좌표/오차 정보 표시**:
+  - 이미지 내에 Mv, Mv', BSP 좌표를 표시한다.
+  - Mv'→BSP의 `dx, dy, distance(px)`를 함께 표기해 초기 오차를 즉시 확인 가능하다.
+- **버전 번호**: 현재 최종 배포 버전은 `v10.0.0` 이다.
+
 ### 정밀 제어용 파라미터
 
 GUI에서 아래 파라미터들을 조정하여 실제 공정 조건에 맞게 전략 2를 튜닝할 수 있다.
@@ -206,7 +223,7 @@ python app.py
 
 4. 화면에서:
    - `Add Files...` 버튼으로 TXT 파일들을 선택하거나, `Generate Example TXT...` 으로 샘플 데이터를 생성한다. (최대 500개)
-   - Output Directory를 지정하거나 비워서 입력 파일 폴더에 저장한다.
+   - Output Directory 기본값은 실행 파일 위치의 `output` 폴더이며, 필요 시 변경 가능하다.
    - 전략 2 파라미터를 입력하고, `How Strategy 2 Works` 패널을 참고해 설정을 조정한다.
    - `Run Processing` 버튼을 누르면,
      - 각 입력 TXT 파일 옆에
@@ -220,7 +237,7 @@ python app.py
 로컬 또는 GitHub Actions에서 PyInstaller를 이용해 윈도우용 EXE를 만들 수 있다.
 
 - 로컬 빌드용 배치 파일: `build_windows.bat`
-  - PyInstaller가 설치되어 있다고 가정하고, `dist/vertualmarker_app.exe` 를 생성한다.
+  - PyInstaller가 설치되어 있다고 가정하고, `dist/virtualmarker_app.exe` 를 생성한다.
 - GitHub Actions 워크플로우: `.github/workflows/windows-build.yml`
   - `windows-latest` 환경에서 Python을 설치하고, 의존성을 설치한 뒤 PyInstaller로 EXE를 빌드한다.
   - 빌드된 EXE는 GitHub Actions의 아티팩트로 업로드되며, 웹에서 바로 다운로드할 수 있다.

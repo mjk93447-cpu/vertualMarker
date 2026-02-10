@@ -5,5 +5,5 @@ This package currently implements:
 - Strategy 2 ("거북이 머리 더듬기") as described in README.md.
 """
 
-__version__ = "9.0.0"
+__version__ = "10.0.0"
 

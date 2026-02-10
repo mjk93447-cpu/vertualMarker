@@ -2,6 +2,7 @@
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 
 from .geometry import Point, distance
 from .strategy2 import Strategy2Result
@@ -28,7 +29,7 @@ def visualize_result(
     out_path: str,
 ) -> None:
     """Visualize turtle-line result, diagnostics and indexed path."""
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(11, 8.8))
 
     # Base edge map points (background)
     if original_points:
@@ -38,8 +39,8 @@ def visualize_result(
             ox,
             oy,
             color="#BDBDBD",
-            s=0.8,
-            alpha=0.22,
+            s=0.35,
+            alpha=0.18,
             linewidths=0.0,
             label="Original edge points",
             zorder=1,
@@ -55,8 +56,8 @@ def visualize_result(
             cx,
             cy,
             color="#8E939C",
-            s=2.0,
-            alpha=0.72,
+            s=0.6,
+            alpha=0.45,
             linewidths=0.0,
             label="Longest lines (raw)" if idx == 0 else None,
             zorder=2,
@@ -71,9 +72,9 @@ def visualize_result(
             xs,
             ys,
             color="#1F77B4",
-            linewidth=0.85,
+            linewidth=0.22,
             label="Turtle line",
-            alpha=0.95,
+            alpha=0.85,
             zorder=3,
         )
 
@@ -87,7 +88,7 @@ def visualize_result(
             by,
             c=indices,
             cmap="turbo",
-            s=8,
+            s=0.8,
             label="Bending points (1..PBL)",
             linewidths=0.0,
             zorder=5,
@@ -102,12 +103,13 @@ def visualize_result(
         [result.tlsp[0]],
         [result.tlsp[1]],
         color="#D62728",
-        s=62,
+        s=42,
         marker="v",
         label="TLSP",
         zorder=10,
-        edgecolors="white",
-        linewidths=0.8,
+        edgecolors="none",
+        linewidths=0.0,
+        alpha=0.56,
     )
     ax.annotate(
         "TLSP",
@@ -123,12 +125,13 @@ def visualize_result(
         [result.bsp[0]],
         [result.bsp[1]],
         color="#FF7F0E",
-        s=62,
+        s=42,
         marker="D",
         label="BSP",
         zorder=10,
-        edgecolors="white",
-        linewidths=0.8,
+        edgecolors="none",
+        linewidths=0.0,
+        alpha=0.56,
     )
     ax.annotate(
         "BSP",
@@ -144,12 +147,13 @@ def visualize_result(
         [result.mv[0]],
         [result.mv[1]],
         color="#9467BD",
-        s=58,
+        s=38,
         marker="P",
         label="Mv",
         zorder=10,
-        edgecolors="white",
-        linewidths=0.8,
+        edgecolors="none",
+        linewidths=0.0,
+        alpha=0.52,
     )
     ax.annotate(
         "Mv",
@@ -165,11 +169,12 @@ def visualize_result(
         [result.mv_shifted[0]],
         [result.mv_shifted[1]],
         color="#E377C2",
-        s=54,
+        s=34,
         marker="x",
         label="Mv shifted",
         zorder=10,
-        linewidths=1.2,
+        linewidths=0.8,
+        alpha=0.7,
     )
     ax.annotate(
         "Mv'",
@@ -189,8 +194,9 @@ def visualize_result(
             fh_x,
             fh_y,
             color="#2CA02C",
-            linewidth=1.25,
+            linewidth=0.24,
             label="Front head (FH)",
+            alpha=0.85,
             zorder=8,
         )
 
@@ -201,8 +207,9 @@ def visualize_result(
             uh_x,
             uh_y,
             color="#8C564B",
-            linewidth=1.25,
+            linewidth=0.24,
             label="Upper head (UH)",
+            alpha=0.85,
             zorder=8,
         )
 
@@ -217,13 +224,40 @@ def visualize_result(
             ix,
             iy,
             color="#FF2D2D",
-            s=80,
+            s=38,
             marker="X",
-            edgecolors="white",
-            linewidths=0.8,
+            edgecolors="none",
+            linewidths=0.0,
+            alpha=0.7,
             zorder=12,
             label="Critical issue point",
         )
+
+    mv_bsp_dx = result.bsp[0] - result.mv_shifted[0]
+    mv_bsp_dy = result.bsp[1] - result.mv_shifted[1]
+    mv_bsp_dist = distance(result.mv_shifted, result.bsp)
+    ax.text(
+        0.01,
+        0.01,
+        (
+            f"Mv  = ({result.mv[0]}, {result.mv[1]})\n"
+            f"Mv' = ({result.mv_shifted[0]}, {result.mv_shifted[1]})\n"
+            f"BSP = ({result.bsp[0]}, {result.bsp[1]})\n"
+            f"Delta(Mv'->BSP): dx={mv_bsp_dx}, dy={mv_bsp_dy}, dist={mv_bsp_dist:.2f}px"
+        ),
+        transform=ax.transAxes,
+        fontsize=8,
+        color="#DDE3EF",
+        va="bottom",
+        ha="left",
+        bbox={
+            "boxstyle": "round,pad=0.25",
+            "facecolor": "#161A22",
+            "edgecolor": "#5A667D",
+            "alpha": 0.72,
+            "linewidth": 0.4,
+        },
+    )
 
     ax.set_aspect("equal", adjustable="datalim")
     ax.invert_yaxis()  # 이미지 좌표계 (y가 아래로 증가)
@@ -231,7 +265,12 @@ def visualize_result(
     ax.set_ylabel("Y (pixel)")
     ax.set_title("Strategy 2 - Turtle Line, Longest Components, and Bending Trajectory")
     ax.legend(loc="best", fontsize=8, framealpha=0.9)
-    ax.grid(True, alpha=0.15, linewidth=0.5)
+    ax.xaxis.set_major_locator(MultipleLocator(25))
+    ax.yaxis.set_major_locator(MultipleLocator(25))
+    ax.xaxis.set_minor_locator(MultipleLocator(5))
+    ax.yaxis.set_minor_locator(MultipleLocator(5))
+    ax.grid(which="major", color="#AAB3C2", alpha=0.24, linewidth=0.28)
+    ax.grid(which="minor", color="#BFC6D2", alpha=0.18, linewidth=0.18)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=200, bbox_inches="tight")

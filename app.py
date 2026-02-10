@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QDoubleSpinBox,
     QGridLayout,
@@ -28,14 +29,60 @@ from PySide6.QtWidgets import (
 )
 
 from vertualmarker.data_generator import SyntheticParams, generate_turtle_and_partner, save_points_txt
-from vertualmarker.strategy2 import Strategy2Config, Strategy2Error, parse_txt_points, run_strategy2_on_file, save_result_points_txt
+from vertualmarker.strategy2 import (
+    Strategy2Config,
+    Strategy2Error,
+    parse_txt_points,
+    run_strategy2_on_file,
+    save_result_points_txt,
+)
 from vertualmarker.visualization import visualize_result
+
+
+class ImagePreviewDialog(QDialog):
+    def __init__(self, image_path: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Preview - {os.path.basename(image_path)}")
+        self.resize(1200, 900)
+        layout = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        holder = QWidget()
+        holder_layout = QVBoxLayout(holder)
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = QPixmap(image_path)
+        if not pix.isNull():
+            image_label.setPixmap(
+                pix.scaled(
+                    1800,
+                    1400,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        holder_layout.addWidget(image_label)
+        scroll.setWidget(holder)
+        layout.addWidget(scroll)
+
+
+class ClickableImageLabel(QLabel):
+    def __init__(self, image_path: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.image_path = image_path
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            dlg = ImagePreviewDialog(self.image_path, self)
+            dlg.exec()
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Virtual Marker v9 - Final Release Workbench")
+        self.setWindowTitle("Virtual Marker v10 - Final Release Workbench")
         self.resize(1500, 980)
         self.preview_paths: List[str] = []
 
@@ -44,7 +91,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(central)
         self._apply_professional_theme()
 
-        title = QLabel("Virtual Marker v9 - Final Release")
+        title = QLabel("Virtual Marker v10 - Final Release")
         title.setObjectName("TitleLabel")
         subtitle = QLabel(
             "Production-ready workstation for Strategy 2: diagnostics, trajectory export, "
@@ -290,7 +337,7 @@ class MainWindow(QMainWindow):
                 color: #D9E8FF;
                 font-weight: 600;
             }
-            QLabel#PreviewTile {
+            QWidget#PreviewTile {
                 border: 1px solid #3E4C63;
                 border-radius: 8px;
                 background: #1C212A;
@@ -346,21 +393,30 @@ class MainWindow(QMainWindow):
         for idx, img_path in enumerate(self.preview_paths):
             row = idx // cols
             col = idx % cols
-            tile = QLabel()
-            tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            tile.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+            tile = QWidget()
+            tile.setObjectName("PreviewTile")
+            tile_layout = QVBoxLayout(tile)
+
+            image_label = ClickableImageLabel(img_path)
+            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             pix = QPixmap(img_path)
             if not pix.isNull():
-                tile.setPixmap(
+                image_label.setPixmap(
                     pix.scaled(
-                        320,
-                        240,
+                        360,
+                        260,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
                 )
-            tile.setText(tile.text() + f"\n{os.path.basename(img_path)}")
-            tile.setObjectName("PreviewTile")
+
+            name_label = QLabel(os.path.basename(img_path))
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            name_label.setWordWrap(True)
+            tile_layout.addWidget(image_label)
+            tile_layout.addWidget(name_label)
             self.preview_grid.addWidget(tile, row, col)
 
     def _append_preview(self, img_path: str) -> None:
